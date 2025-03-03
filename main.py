@@ -20,8 +20,9 @@ class URL:
         import socket
 
         reqlines = [
-            f'GET {self.path} HTTP/1.0\r\n',
+            f'GET {self.path} HTTP/1.1\r\n',
             f'Host: {self.host}\r\n',
+            f'Connection: close\r\n'
             '\r\n',
         ]
         request = "".join(reqlines)
