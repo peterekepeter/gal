@@ -1,12 +1,19 @@
 
+
 class URL:
     def __init__(self, url):
         self.scheme, url = url.split("://")
-        assert self.scheme in ["http", "https"]
-        if "/" not in url:
-            url = url + "/"
-        self.host, url = url.split("/", 1)
-        self.path = "/" + url
+        supported = ["http", "https", "file"]
+        assert self.scheme in supported
+        if self.scheme == "file":
+            self.host = ""
+            self.path = url
+        else:
+            if "/" not in url:
+                url = url + "/"  
+            self.host, url = url.split("/", 1)
+            self.path = "/" + url
+      
         if ":" in self.host:
             self.host, port = self.host.split(":", 1)
             self.port = int(port)
@@ -15,8 +22,17 @@ class URL:
         elif self.scheme == "https":
             self.port = 443
     
-
     def request(self):
+        if self.scheme == "file":
+            return self.requestFile()
+        else:
+            return self.requestSocket()
+
+    def requestFile(self):
+        with open(self.path) as f:
+            return f.read()
+
+    def requestSocket(self):
         import socket
 
         reqlines = [
@@ -94,6 +110,10 @@ def test():
 
     url = URL("https://example.org:8080")
     assert url.port == 8080
+
+    url = URL("file:///path/to/file/index.html")
+    assert url.scheme == "file"
+    assert url.path == "/path/to/file/index.html"
 
 if __name__ == "__main__":
     import sys
