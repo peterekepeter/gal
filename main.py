@@ -2,6 +2,10 @@
 
 class URL:
     def __init__(self, url):
+        if url.startswith("data:"):
+            self.scheme, url = url.split(":", 1)
+            self.mimetype, self.content = url.split(",", 1)
+            return
         self.scheme, url = url.split("://")
         supported = ["http", "https", "file"]
         assert self.scheme in supported
@@ -23,7 +27,9 @@ class URL:
             self.port = 443
     
     def request(self):
-        if self.scheme == "file":
+        if self.scheme == "data":
+            return self.content
+        elif self.scheme == "file":
             return self.requestFile()
         else:
             return self.requestSocket()
@@ -114,6 +120,13 @@ def test():
     url = URL("file:///path/to/file/index.html")
     assert url.scheme == "file"
     assert url.path == "/path/to/file/index.html"
+
+    url = URL("data:text/html,Hello world!")
+    assert url.scheme == "data"
+    assert url.mimetype == "text/html"
+    assert url.content == "Hello world!"
+    assert url.request() == "Hello world!"
+
 
 if __name__ == "__main__":
     import sys
