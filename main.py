@@ -82,16 +82,37 @@ class URL:
         s.close()
         return content
 
+entity_map = {
+    "&lt;": "<",
+    "&gt;": ">",
+}
 
-def show(body):
+def show(body, outp=print):
     in_tag = False
+    in_entity = False
     for c in body:
-        if c == "<":
+        if c == "&":
+            in_entity = True
+            entity = "&"
+        elif in_entity:
+            entity += c
+            if c == ";":
+                in_entity = False
+                entity = entity_map.get(entity, entity)
+                outp(entity, end="")
+        elif c == "<":
             in_tag = True
         elif c == ">":
             in_tag = False
         elif not in_tag:
-            print(c, end="")
+            outp(c, end="")
+
+
+def showtostr(body) -> str:
+    arr = []
+    fn = lambda x, end="": arr.append(x)
+    show(body, fn)
+    return "".join(arr)
 
 
 def browse(urlstr):
@@ -100,8 +121,18 @@ def browse(urlstr):
     result = url.request()
     show(result)
     
-
 def test():
+    test_URL()
+    test_show()
+
+def test_show():
+    f = showtostr
+    assert f("x") == "x"
+    assert f("<h1>Hi!</h1>") == "Hi!"
+    assert f("&lt;") == "<"
+    assert f("&lt;div&gt;") == "<div>"
+
+def test_URL():
     print("running tests")
 
     url = URL("http://example.org")
