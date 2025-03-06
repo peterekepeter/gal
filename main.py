@@ -2,6 +2,10 @@
 
 class URL:
     def __init__(self, url):
+        self.viewsource = False
+        if url.startswith("view-source:"):
+            url = url[12:]
+            self.viewsource = True
         if url.startswith("data:"):
             self.scheme, url = url.split(":", 1)
             self.mimetype, self.content = url.split(",", 1)
@@ -119,7 +123,10 @@ def browse(urlstr):
     print("navigating to", urlstr)
     url = URL(urlstr)
     result = url.request()
-    show(result)
+    if url.viewsource:
+        print(result)
+    else:
+        show(result)
     
 def test():
     test_URL()
@@ -157,6 +164,11 @@ def test_URL():
     assert url.mimetype == "text/html"
     assert url.content == "Hello world!"
     assert url.request() == "Hello world!"
+
+    url = URL("view-source:http://example.org/")
+    assert url.viewsource == True
+    assert url.scheme == "http"
+    assert url.host == "example.org"
 
 
 if __name__ == "__main__":
