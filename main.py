@@ -321,6 +321,7 @@ class GUI:
         result = url.request(max_redirect=max_redirect)
         import tkinter
         if not self.window:
+            print("creating window")
             self.window = tkinter.Tk()
             self.window.bind("<Up>", self.scrollup)
             self.window.bind("<Down>", self.scrolldown)
@@ -337,8 +338,8 @@ class GUI:
         self.height = HEIGHT
         self.vstep = VSTEP
         self.hstep = HSTEP
-        self.display_list, self.scroll_bottom = layout(self.text, WIDTH, HEIGHT, HSTEP, VSTEP, RTL=default_rtl)
-        self.draw()
+        # self.display_list, self.scroll_bottom = layout(self.text, WIDTH, HEIGHT, HSTEP, VSTEP, RTL=default_rtl)
+        # self.draw()
         canvas.pack(fill=tkinter.BOTH, expand=1)
         tkinter.mainloop()
 
@@ -386,6 +387,7 @@ class GUI:
         self.width = e.width
         self.height = e.height
         self.display_list, self.scroll_bottom = layout(self.text, self.width, self.height, self.hstep, self.vstep, RTL=default_rtl)
+        self.limitscrollinbounds()
         self.draw()
 
 
@@ -397,17 +399,29 @@ def layout(text, WIDTH=800, HEIGHT=600, HSTEP=12, VSTEP=18, RTL=False):
     line = []
     for c in text:
         line.append((cursor_x, cursor_y, c))
-        cursor_x += x_step
+        cursor_x += HSTEP
         if c == "\n" or cursor_x >= WIDTH - HSTEP:
             x_end = cursor_x
             for item in line:
-                x,y,c = item
                 if RTL:
+                    x,y,c = item
                     x=x+WIDTH-x_end
-                display_list.append((x,y,c))
+                    display_list.append((x,y,c))
+                else:
+                    display_list.append(item)
+            line = []
             cursor_y += VSTEP
             cursor_x = x_start
             line_start_at = len(display_list)
+    if line:
+        for item in line:
+            if RTL:
+                x,y,c = item
+                x=x+WIDTH-x_end
+                display_list.append((x,y,c))
+            else:
+                display_list.append(item)
+
     return display_list, cursor_y + VSTEP
 
 
