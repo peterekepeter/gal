@@ -1,4 +1,5 @@
 sock_pool = {}
+http_cache = {}
 
 class URL:
     def __init__(self, url, parent=None):
@@ -51,8 +52,24 @@ class URL:
 
     def request_socket(self, max_redirect=3):
         global sock_pool
+        global http_cache
+    
+        cache_key = (self.scheme, self.host, self.port, self.path)
+        if cache_key in http_cache:
+            cache_entry = http_cache[cache_key]
+            expires = cache_entry["expires"]
+            expired = False
+            if expires > 0:
+                import time
+                if time.time() >= expires:
+                    expired = True
+            if expired:
+                del http_cache[cache_key]
+            else:
+                content = cache_entry["content"]
+                return content
 
-        key = get_socket_reuse_key(self)
+        key = (self.scheme, self.host, self.port)
         s = None
         f = None
         if key in sock_pool:
@@ -71,8 +88,9 @@ class URL:
                 s = ctx.wrap_socket(s, server_hostname=self.host)
             f = s.makefile("rb", encoding="utf8", newline="\r\n")
             
+        method = 'GET'
         reqlines = [
-            f'GET {self.path} HTTP/1.1\r\n',
+            f'{method} {self.path} HTTP/1.1\r\n',
             f'Host: {self.host}\r\n',
             f'Connection: keep-alive\r\n',
             '\r\n',
@@ -91,6 +109,8 @@ class URL:
             header, value = line.split(":", 1)
             response_headers[header.casefold()] = value.strip()
         
+        print(response_headers) #debug
+
         # content encoding not supported
         assert "transfer-encoding" not in response_headers
         assert "content-encoding" not in response_headers
@@ -124,12 +144,32 @@ class URL:
             if location:
                 url = URL(location, parent=self)
                 content = url.request(max_redirect=max_redirect-1)
+
+        if code == 200 and method == 'GET':
+            cache_control = response_headers.get('cache-control')
+            expires = 0
+            if cache_control == None:
+                store = True
+            elif 'no-store' in cache_control:
+                store = False
+            elif 'max-age' in cache_control:
+                import time
+                now = time.time()
+                _, n = cache_control.split("=", 1)
+                seconds = int(n)
+                expires = now + seconds * 1000
+            else:
+                # cache control not handled, better not cache
+                store = False 
+            
+            if store:
+                http_cache[cache_key] = {
+                    "content": content,
+                    "expires": expires
+                }
         
         return content
 
-
-def get_socket_reuse_key(url: URL):
-    return (url.scheme, url.host, url.port)
 
 entity_map = {
     '&nbsp;': ' ',
@@ -151,7 +191,7 @@ entity_map = {
 def show(body, outp=print):
     in_tag = False
     in_entity = False
-    limit = 1000000
+    limit = 1000
     for c in body:
         limit -= 1
         if limit <= 0: break
@@ -229,9 +269,6 @@ def test_URL():
     assert url.viewsource == True
     assert url.scheme == "http"
     assert url.host == "example.org"
-
-    url = URL("https://example.org")
-    assert get_socket_reuse_key(url) == ("https", "example.org", 443)
 
     url = URL("https://example.org")
     url = URL("/404.html", parent=url)
