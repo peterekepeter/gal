@@ -1,5 +1,6 @@
 sock_pool = {}
 http_cache = {}
+http_cache_dir = None
 
 class URL:
     def __init__(self, url, parent=None):
@@ -54,7 +55,21 @@ class URL:
         global sock_pool
         global http_cache
     
-        cache_key = (self.scheme, self.host, self.port, self.path)
+        if http_cache_dir:
+            import os
+            import json
+            if not os.path.isdir(http_cache_dir):
+                os.makedirs(http_cache_dir)
+            cache_index = http_cache_dir + "/__cache.json"
+            if os.path.isfile(cache_index):
+                try:
+                    with open(cache_index, "r", encoding="utf8") as f:
+                        http_cache = json.load(f)
+                except:
+                    print("Warning: Failed to load cache index")
+                    http_cache = {}
+
+        cache_key = self.get_cache_key()
         if cache_key in http_cache:
             cache_entry = http_cache[cache_key]
             expires = cache_entry["expires"]
@@ -65,9 +80,20 @@ class URL:
                     expired = True
             if expired:
                 del http_cache[cache_key]
+                if http_cache_dir:
+                    import os
+                    os.remove(http_cache_dir + "/" + blob_id)
             else:
-                content = cache_entry["content"]
-                return content
+                if "content" in cache_entry:
+                    content = cache_entry["content"]
+                    return content
+                if http_cache_dir and "blob_id" in cache_entry:
+                    blob_id = cache_entry["blob_id"]
+                    with open(http_cache_dir + "/" + blob_id, "rb") as f:
+                        bytes = f.read()
+                        content = bytes.decode("utf8")
+                        print("file cache hit")
+                        return content
 
         key = (self.scheme, self.host, self.port)
         s = None
@@ -187,16 +213,31 @@ class URL:
                 expires = now + seconds * 1000
             else:
                 # cache control not handled, better not cache
-                store = False 
+                store = False
             
             if store:
-                http_cache[cache_key] = {
-                    "content": content,
-                    "expires": expires
+                cache_entry = {
+                    "expires": expires,
                 }
+                http_cache[cache_key] = cache_entry
+                if http_cache_dir:
+                    import uuid
+                    blob_id = str(uuid.uuid4())
+                    blob_path = http_cache_dir + "/" + blob_id
+                    cache_entry["blob_id"] = blob_id
+                    print(http_cache)
+                    with open(blob_path, "wb") as f:
+                        f.write(bytes)
+                    with open(cache_index, "w", encoding="utf8") as f:
+                        json.dump(http_cache, f, indent=1)
+                else:
+                    cache_entry["content"] = content
+                print(http_cache)
         
         return content
 
+    def get_cache_key(self) -> str:
+        return f'{self.scheme}://{self.host}:{self.port}{self.path}'
 
 entity_map = {
     '&nbsp;': ' ',
@@ -307,8 +348,13 @@ def test_URL():
 
 if __name__ == "__main__":
     import sys
+    keyname = None
     for arg in sys.argv[1:]:
-        if arg.startswith('-'):
+        if keyname:
+            if keyname == "--cache-dir":
+                http_cache_dir = arg
+            keyname = None
+        elif arg.startswith('-'):
             flag = arg
             if "--test" == flag:
                 test()
@@ -316,7 +362,9 @@ if __name__ == "__main__":
                 print("1.0.0")
             elif "--help" == flag:
                 print("gal web browser")
-            elif arg.startswith("-"):
+            elif "--cache-dir" == flag:
+                keyname = flag
+            else:
                 print(f"unknown flag '{flag}'")
         else:
             url = arg
