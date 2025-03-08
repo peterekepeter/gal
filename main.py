@@ -1,7 +1,11 @@
 sock_pool = {}
 
 class URL:
-    def __init__(self, url):
+    def __init__(self, url, parent=None):
+        if parent:
+            self.scheme = parent.scheme
+            self.host = parent.host
+            self.port = parent.port
         self.viewsource = False
         if url.startswith("view-source:"):
             url = url[12:]
@@ -9,6 +13,9 @@ class URL:
         if url.startswith("data:"):
             self.scheme, url = url.split(":", 1)
             self.mimetype, self.content = url.split(",", 1)
+            return
+        if url.startswith("/"):
+            self.path = url
             return
         self.scheme, url = url.split("://")
         supported = ["http", "https", "file"]
@@ -30,26 +37,26 @@ class URL:
         elif self.scheme == "https":
             self.port = 443
     
-    def request(self):
+    def request(self, max_redirect=3):
         if self.scheme == "data":
             return self.content
         elif self.scheme == "file":
             return self.request_file()
         else:
-            return self.request_socket()
+            return self.request_socket(max_redirect)
 
     def request_file(self):
         with open(self.path) as f:
             return f.read()
 
-    def request_socket(self):
+    def request_socket(self, max_redirect=3):
+        global sock_pool
 
         key = get_socket_reuse_key(self)
         s = None
         f = None
         if key in sock_pool:
             (s,f) = sock_pool[key] # reuse existing socket
-            print("reusing socket", s, f)
         else:
             import socket # init new TCP/IP connection
             s = socket.socket(
@@ -102,13 +109,21 @@ class URL:
             assert len(bytes) == content_length
         else:
             bytes = response.read()
+            s.close()
         
         content = bytes.decode('utf8')
-        
+        code = int(status)
+
         if keep_alive:
             sock_pool[key] = (s,f)
         elif key in sock_pool:
             del sock_pool[key]
+
+        if 300 <= code < 400 and max_redirect > 0:
+            location = response_headers.get('location')
+            if location:
+                url = URL(location, parent=self)
+                content = url.request(max_redirect=max_redirect-1)
         
         return content
 
@@ -116,16 +131,30 @@ class URL:
 def get_socket_reuse_key(url: URL):
     return (url.scheme, url.host, url.port)
 
-
 entity_map = {
-    "&lt;": "<",
-    "&gt;": ">",
+    '&nbsp;': ' ',
+    '&lt;': '<',
+    '&gt;': '>',
+    '&amp;': '&',
+    '&quot;': '\"',
+    '&apos;': '\'',
+    '&cent;': '¢', 	
+    '&pound;': '£', 	
+    '&yen;': '¥', 	
+    '&euro;': '€', 	
+    '&copy;': '©', 	
+    '&reg;': '®',
+    '&ndash;': '–',
+    '&mdash;': '—',
 }
 
 def show(body, outp=print):
     in_tag = False
     in_entity = False
+    limit = 1000000
     for c in body:
+        limit -= 1
+        if limit <= 0: break
         if c == "&":
             in_entity = True
             entity = "&"
@@ -150,16 +179,17 @@ def showtostr(body) -> str:
     return "".join(arr)
 
 
-def browse(urlstr):
+def browse(urlstr, max_redirect=5):
     print("navigating to", urlstr)
     url = URL(urlstr)
-    result = url.request()
+    result = url.request(max_redirect=max_redirect)
     if url.viewsource:
         print(result)
     else:
         show(result)
     
 def test():
+    print("run tests")
     test_URL()
     test_show()
 
@@ -171,8 +201,7 @@ def test_show():
     assert f("&lt;div&gt;") == "<div>"
 
 def test_URL():
-    print("running tests")
-
+    
     url = URL("http://example.org")
     assert url.scheme == "http"
     assert url.host == "example.org"
@@ -203,6 +232,13 @@ def test_URL():
 
     url = URL("https://example.org")
     assert get_socket_reuse_key(url) == ("https", "example.org", 443)
+
+    url = URL("https://example.org")
+    url = URL("/404.html", parent=url)
+    assert url.path == "/404.html"
+    assert url.host == "example.org"
+    assert url.port == 443
+    assert url.scheme == "https"
 
 
 if __name__ == "__main__":

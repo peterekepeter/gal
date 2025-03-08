@@ -13,3 +13,9 @@ Test with local server
 
     python -m http.server 8000 -d ./
     python main.py http://localhost:8000
+
+Test redirection
+
+    python main.py http://browser.engineering/redirect
+    python main.py http://browser.engineering/redirect2
+    python main.py http://browser.engineering/redirect3
