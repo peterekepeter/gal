@@ -1,6 +1,7 @@
 sock_pool = {}
 http_cache = {}
 http_cache_dir = None
+default_rtl = False
 
 class URL:
     def __init__(self, url, parent=None):
@@ -12,6 +13,9 @@ class URL:
         if url.startswith("view-source:"):
             url = url[12:]
             self.viewsource = True
+        if url.startswith("about:"):
+            self.scheme, self.path = url.split(":", 1)
+            return
         if url.startswith("data:"):
             self.scheme, url = url.split(":", 1)
             self.mimetype, self.content = url.split(",", 1)
@@ -40,6 +44,11 @@ class URL:
             self.port = 443
     
     def request(self, max_redirect=3):
+        if self.scheme == "about":
+            if self.path == "blank":
+                return ""
+            else:
+                return "page not found"
         if self.scheme == "data":
             return self.content
         elif self.scheme == "file":
@@ -92,7 +101,6 @@ class URL:
                     with open(http_cache_dir + "/" + blob_id, "rb") as f:
                         bytes = f.read()
                         content = bytes.decode("utf8")
-                        print("file cache hit")
                         return content
 
         key = (self.scheme, self.host, self.port)
@@ -184,6 +192,7 @@ class URL:
             bytes = gzip.decompress(bytes)
             content_length = len(bytes)
 
+        print(response_headers)
         content = bytes.decode('utf8')
         code = int(status)
 
@@ -201,8 +210,9 @@ class URL:
         if code == 200 and method == 'GET':
             cache_control = response_headers.get('cache-control')
             expires = 0
+            store = True
             if cache_control == None:
-                store = True
+                pass
             elif 'no-store' in cache_control:
                 store = False
             elif 'max-age' in cache_control:
@@ -225,14 +235,12 @@ class URL:
                     blob_id = str(uuid.uuid4())
                     blob_path = http_cache_dir + "/" + blob_id
                     cache_entry["blob_id"] = blob_id
-                    print(http_cache)
                     with open(blob_path, "wb") as f:
                         f.write(bytes)
                     with open(cache_index, "w", encoding="utf8") as f:
                         json.dump(http_cache, f, indent=1)
                 else:
                     cache_entry["content"] = content
-                print(http_cache)
         
         return content
 
@@ -256,13 +264,11 @@ entity_map = {
     '&mdash;': '—',
 }
 
-def show(body, outp=print):
+def lex(body):
     in_tag = False
     in_entity = False
-    limit = 10000
+    text = ""
     for c in body:
-        limit -= 1
-        if limit <= 0: break
         if c == "&":
             in_entity = True
             entity = "&"
@@ -271,38 +277,147 @@ def show(body, outp=print):
             if c == ";":
                 in_entity = False
                 entity = entity_map.get(entity, entity)
-                outp(entity, end="")
+                text += entity
         elif c == "<":
             in_tag = True
         elif c == ">":
             in_tag = False
         elif not in_tag:
-            outp(c, end="")
+            text += c
+    return text
 
 
-def showtostr(body) -> str:
-    arr = []
-    fn = lambda x, end="": arr.append(x)
-    show(body, fn)
-    return "".join(arr)
+class CLI:
+
+    def browse(self, urlstr, max_redirect=5):
+        print("navigating to", urlstr)
+        url = URL(urlstr)
+        result = url.request(max_redirect=max_redirect)
+        if url.viewsource:
+            print(result)
+        else:
+            print(lex(result))
+
+class GUI:
+
+    def __init__(self):
+        self.window = None
+        self.canvas = None
+        self.scroll = 0
+
+    def browse(self, urlstr, max_redirect=5):
+        WIDTH, HEIGHT = 800, 600
+        HSTEP, VSTEP = 12, 18
+
+        print("navigating to", urlstr)
+        try:
+            url = URL(urlstr)
+        except Exception as err:
+            import traceback
+            print("Error: failed to parse URL")
+            print(traceback.format_exc())
+            url = URL("about:blank")
+
+        result = url.request(max_redirect=max_redirect)
+        import tkinter
+        if not self.window:
+            self.window = tkinter.Tk()
+            self.window.bind("<Up>", self.scrollup)
+            self.window.bind("<Down>", self.scrolldown)
+            self.window.bind("<MouseWheel>", self.mousewheel)
+            self.window.bind("<Configure>", self.configure)
+        window = self.window
+        if not self.canvas:
+            self.canvas = tkinter.Canvas(window, width=WIDTH, height=HEIGHT)
+        canvas = self.canvas
+
+        window.title(urlstr)
+        self.text = lex(result)
+        self.width = WIDTH
+        self.height = HEIGHT
+        self.vstep = VSTEP
+        self.hstep = HSTEP
+        self.display_list, self.scroll_bottom = layout(self.text, WIDTH, HEIGHT, HSTEP, VSTEP, RTL=default_rtl)
+        self.draw()
+        canvas.pack(fill=tkinter.BOTH, expand=1)
+        tkinter.mainloop()
+
+    def draw(self):
+        import tkinter as tk
+        self.canvas.delete("all")
+
+        for x, y, c in self.display_list:
+            if y > self.scroll + self.height: continue
+            if y + self.vstep < self.scroll: continue
+            self.canvas.create_text(x, y - self.scroll, text=c)
+        if self.scroll_bottom > self.height:
+            pos_0 = self.scroll / self.scroll_bottom
+            pos_1 = (self.scroll + self.height) / self.scroll_bottom
+            self.canvas.create_rectangle(
+                self.width-8, self.height*pos_0, 
+                self.width, self.height*pos_1, 
+                fill="#000"
+            )
+
+    def scrollup(self, e):
+        SCROLL_STEP = 100
+        self.scroll -= SCROLL_STEP
+        self.limitscrollinbounds()
+        self.draw()
+
+    def scrolldown(self, e):
+        SCROLL_STEP = 100
+        self.scroll += SCROLL_STEP
+        self.limitscrollinbounds()
+        self.draw()
+
+    def mousewheel(self, e):
+        self.scroll -= e.delta
+        self.limitscrollinbounds()
+        self.draw()
+
+    def limitscrollinbounds(self):
+        if self.scroll < 0:
+            self.scroll = 0
+        elif self.scroll + self.height > self.scroll_bottom:
+            self.scroll = self.scroll_bottom - self.height
+
+    def configure(self, e):
+        self.width = e.width
+        self.height = e.height
+        self.display_list, self.scroll_bottom = layout(self.text, self.width, self.height, self.hstep, self.vstep, RTL=default_rtl)
+        self.draw()
 
 
-def browse(urlstr, max_redirect=5):
-    print("navigating to", urlstr)
-    url = URL(urlstr)
-    result = url.request(max_redirect=max_redirect)
-    if url.viewsource:
-        print(result)
-    else:
-        show(result)
-    
+
+def layout(text, WIDTH=800, HEIGHT=600, HSTEP=12, VSTEP=18, RTL=False):
+    display_list = []
+    cursor_x, cursor_y = HSTEP, VSTEP
+    x_start = cursor_x
+    line = []
+    for c in text:
+        line.append((cursor_x, cursor_y, c))
+        cursor_x += x_step
+        if c == "\n" or cursor_x >= WIDTH - HSTEP:
+            x_end = cursor_x
+            for item in line:
+                x,y,c = item
+                if RTL:
+                    x=x+WIDTH-x_end
+                display_list.append((x,y,c))
+            cursor_y += VSTEP
+            cursor_x = x_start
+            line_start_at = len(display_list)
+    return display_list, cursor_y + VSTEP
+
+
 def test():
     print("run tests")
     test_URL()
     test_show()
 
 def test_show():
-    f = showtostr
+    f = lex
     assert f("x") == "x"
     assert f("<h1>Hi!</h1>") == "Hi!"
     assert f("&lt;") == "<"
@@ -348,6 +463,7 @@ def test_URL():
 
 if __name__ == "__main__":
     import sys
+    interface = GUI()
     keyname = None
     for arg in sys.argv[1:]:
         if keyname:
@@ -356,16 +472,22 @@ if __name__ == "__main__":
             keyname = None
         elif arg.startswith('-'):
             flag = arg
-            if "--test" == flag:
+            if "--gui" == flag:
+                interface = GUI()
+            elif "--cli" == flag:
+                interface = CLI()
+            elif "--test" == flag:
                 test()
             elif "--version" == flag:
                 print("1.0.0")
             elif "--help" == flag:
                 print("gal web browser")
+            elif flag == "--rtl":
+                default_rtl = True
             elif "--cache-dir" == flag:
                 keyname = flag
             else:
                 print(f"unknown flag '{flag}'")
         else:
             url = arg
-            browse(url)
+            interface.browse(url)
