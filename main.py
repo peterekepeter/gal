@@ -1,4 +1,4 @@
-
+sock_pool = {}
 
 class URL:
     def __init__(self, url):
@@ -34,45 +34,52 @@ class URL:
         if self.scheme == "data":
             return self.content
         elif self.scheme == "file":
-            return self.requestFile()
+            return self.request_file()
         else:
-            return self.requestSocket()
+            return self.request_socket()
 
-    def requestFile(self):
+    def request_file(self):
         with open(self.path) as f:
             return f.read()
 
-    def requestSocket(self):
-        import socket
+    def request_socket(self):
 
+        key = get_socket_reuse_key(self)
+        s = None
+        f = None
+        if key in sock_pool:
+            (s,f) = sock_pool[key] # reuse existing socket
+            print("reusing socket", s, f)
+        else:
+            import socket # init new TCP/IP connection
+            s = socket.socket(
+                family=socket.AF_INET,
+                type=socket.SOCK_STREAM,
+                proto=socket.IPPROTO_TCP,
+            )
+            s.connect((self.host, self.port))
+            if self.scheme == "https":
+                import ssl # need encryption
+                ctx = ssl.create_default_context()
+                s = ctx.wrap_socket(s, server_hostname=self.host)
+            f = s.makefile("rb", encoding="utf8", newline="\r\n")
+            
         reqlines = [
             f'GET {self.path} HTTP/1.1\r\n',
             f'Host: {self.host}\r\n',
-            f'Connection: close\r\n'
+            f'Connection: keep-alive\r\n',
             '\r\n',
         ]
         request = "".join(reqlines)
-
-        s = socket.socket(
-            family=socket.AF_INET,
-            type=socket.SOCK_STREAM,
-            proto=socket.IPPROTO_TCP,
-        )
-        s.connect((self.host, self.port))
-        if self.scheme == "https":
-            import ssl
-            ctx = ssl.create_default_context()
-            s = ctx.wrap_socket(s, server_hostname=self.host)
-        
         bytessent = s.send(request.encode('utf8'))
-        response = s.makefile("r", encoding="utf8", newline="\r\n")
+        response = f
 
-        statusline = response.readline()
+        statusline = response.readline().decode("utf8")
         version, status, explanation = statusline.split(" ",2)
         print(status, explanation.strip(), "GET", self.host, self.path)
         response_headers = {}
         while True:
-            line = response.readline()
+            line = response.readline().decode("utf8")
             if line == "\r\n": break
             header, value = line.split(":", 1)
             response_headers[header.casefold()] = value.strip()
@@ -80,11 +87,35 @@ class URL:
         # content encoding not supported
         assert "transfer-encoding" not in response_headers
         assert "content-encoding" not in response_headers
+
+        keep_alive = response_headers.get("connection") == "keep-alive"
+
+        if keep_alive:
+            content_length_str = response_headers.get('content-length')
+            if not content_length_str:
+                keep_alive = False
+            else:
+                content_length = int(content_length_str)
+
+        if keep_alive:
+            bytes = response.read(content_length)
+            assert len(bytes) == content_length
+        else:
+            bytes = response.read()
         
-        content = response.read()
+        content = bytes.decode('utf8')
         
-        s.close()
+        if keep_alive:
+            sock_pool[key] = (s,f)
+        elif key in sock_pool:
+            del sock_pool[key]
+        
         return content
+
+
+def get_socket_reuse_key(url: URL):
+    return (url.scheme, url.host, url.port)
+
 
 entity_map = {
     "&lt;": "<",
@@ -170,17 +201,23 @@ def test_URL():
     assert url.scheme == "http"
     assert url.host == "example.org"
 
+    url = URL("https://example.org")
+    assert get_socket_reuse_key(url) == ("https", "example.org", 443)
+
 
 if __name__ == "__main__":
     import sys
-    if "--test" in sys.argv:
-        test()
-    elif "--version" in sys.argv:
-        print("1.0.0")
-    elif "--help" in sys.argv:
-        print("gal web browser")
-    elif len(sys.argv) == 2:
-        browse(sys.argv[1])
-    else:
-        print("unknowns args")
-        sys.exit(1)
+    for arg in sys.argv[1:]:
+        if arg.startswith('-'):
+            flag = arg
+            if "--test" == flag:
+                test()
+            elif "--version" == flag:
+                print("1.0.0")
+            elif "--help" == flag:
+                print("gal web browser")
+            elif arg.startswith("-"):
+                print(f"unknown flag '{flag}'")
+        else:
+            url = arg
+            browse(url)
