@@ -93,6 +93,7 @@ class URL:
             f'{method} {self.path} HTTP/1.1\r\n',
             f'Host: {self.host}\r\n',
             f'Connection: keep-alive\r\n',
+            f'Accept-Encoding: gzip\r\n',
             '\r\n',
         ]
         request = "".join(reqlines)
@@ -108,29 +109,55 @@ class URL:
             if line == "\r\n": break
             header, value = line.split(":", 1)
             response_headers[header.casefold()] = value.strip()
-        
-        print(response_headers) #debug
 
-        # content encoding not supported
-        assert "transfer-encoding" not in response_headers
-        assert "content-encoding" not in response_headers
+        chunked = False
+        gzip = False
+        if "content-encoding" in response_headers:
+            content_encoding = response_headers["content-encoding"]
+            assert content_encoding == "gzip" # others not supported
+            gzip = True
 
+        if "transfer-encoding" in response_headers:
+            transfer_encoding = response_headers["transfer-encoding"]
+            if "chunked" in response_headers["transfer-encoding"]:
+                chunked = True
+            if "gzip" in transfer_encoding:
+                gzip = True
+            assert "compress" not in transfer_encoding # not supported
+            assert "deflate" not in transfer_encoding # not supported
+            
         keep_alive = response_headers.get("connection") == "keep-alive"
 
-        if keep_alive:
-            content_length_str = response_headers.get('content-length')
-            if not content_length_str:
-                keep_alive = False
-            else:
-                content_length = int(content_length_str)
-
-        if keep_alive:
+        if chunked:
+            chunks = []
+            is_transfer = True
+            while is_transfer:
+                chunk_size_str = response.readline().decode("utf8")
+                chunk_size = int(chunk_size_str, 16)
+                chunk = response.read(chunk_size)
+                assert len(chunk) == chunk_size
+                endline = response.readline()
+                chunks.append(chunk)
+                if chunk_size == 0:
+                    is_transfer = False
+            bytes = b''.join(chunks)
+            content_length = len(bytes)
+        elif 'content-length' in response_headers:
+            content_length_str = response_headers['content-length']
+            content_length = int(content_length_str)
             bytes = response.read(content_length)
             assert len(bytes) == content_length
         else:
+            # HTTP/1.0 fallback length unknown -> read until end of socket
+            keep_alive = False 
             bytes = response.read()
             s.close()
         
+        if gzip:
+            import gzip
+            bytes = gzip.decompress(bytes)
+            content_length = len(bytes)
+
         content = bytes.decode('utf8')
         code = int(status)
 
@@ -191,7 +218,7 @@ entity_map = {
 def show(body, outp=print):
     in_tag = False
     in_entity = False
-    limit = 1000
+    limit = 10000
     for c in body:
         limit -= 1
         if limit <= 0: break
