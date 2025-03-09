@@ -24,6 +24,10 @@ class URL:
         if url.startswith("/"):
             self.path = url
             return
+        if "://" not in url:
+            self.scheme = "file"
+            self.path = url
+            return
         self.scheme, url = url.split("://")
         supported = ["http", "https", "file"]
         assert self.scheme in supported
@@ -272,6 +276,7 @@ entity_map = {
     '&ndash;': '–',
     '&mdash;': '—',
     '&#39;': '\'',
+    '&shy;': '­',
 }
 
 def lex(body):
@@ -433,9 +438,15 @@ class Layout:
         self.display_list = []
         self.cursor_x = hstep
         self.cursor_y = vstep
-        self.weight = "normal"
-        self.style = "roman"
+        self.weight = "normal" # bold|normal
+        self.style = "roman" # roman|italic
+        self.align = "auto" # auto|center
+        self.vert_align = "baseline"
+        self.whitespace = ''
+        self.upper = "normal"
+        self.fontfamily = ''
         self.size = 12
+        self.lineheight = 16
         self.scroll_bottom = 0
         for tok in tokens:
             self.token(tok)
@@ -461,46 +472,158 @@ class Layout:
         elif tok.tag == "/big":
             self.size -= 4
         elif tok.tag == "br/":
-            self.flush()
+            self.flush(forceline=True)
+        elif tok.tag == "p" or tok.tag.startswith("p "):
+            pass
         elif tok.tag == "/p":
             self.flush()
             self.cursor_y += self.vstep
+        elif tok.tag == "h1" or tok.tag.startswith("h1 "):
+            self.size = 18
+            self.weight = "bold"
+            self.align = "center"
+        elif tok.tag == "/h1":
+            self.flush()
+            self.size = 12
+            self.weight = "normal"
+            self.align = "auto"
+            self.cursor_y += self.vstep
+        elif tok.tag == "h2" or tok.tag.startswith("h2 "):
+            self.size = 16
+            self.weight = "bold"
+        elif tok.tag == "/h2":
+            self.flush()
+            self.size = 12
+            self.weight = "normal"
+            self.cursor_y += self.vstep
+        elif tok.tag == "sup":
+            self.size = 8
+            self.vert_align = "top"
+        elif tok.tag == "/sup":
+            self.size = 12
+            self.vert_align = "baseline"
+        elif tok.tag == "abbr":
+            self.upper = "all"
+            self.size = 10
+            self.weight = "bold"
+        elif tok.tag == "/abbr":
+            self.upper = "normal"
+            self.size = 12
+            self.weight = "normal"
+        elif tok.tag == "pre":
+            self.whitespace = 'pre'
+            self.fontfamily = 'Courier New'
+        elif tok.tag == "/pre":
+            self.whitespace = ''
+            self.fontfamily = ''
+        elif tok.tag == "code":
+            self.fontfamily = 'Courier New'
+        elif tok.tag == "/code":
+            self.fontfamily = ''
+        
     
     def word(self, tok):
         import tkinter.font
-        font = get_font(self.size, self.weight, self.style)
+        font = get_font(self.fontfamily, self.size, self.weight, self.style)
         space_width = font.measure(" ")
-        for word in tok.text.split():
-            w = font.measure(word)
-            self.line.append((self.cursor_x, word, font))
-            self.cursor_x += w + space_width
-            if self.cursor_x + w > self.width - self.hstep:
-                self.flush()
-                
-    def flush(self):
-        if not self.line: return
-        metrics = [font.metrics() for x, word, font in self.line]
-        max_ascent = max([metric["ascent"] for metric in metrics])
-        baseline = self.cursor_y + 1.25 * max_ascent
+      
+        if self.whitespace == "pre":
+            isnewline = False
+            for line in tok.text.split("\n"):
+                print(line)
+                if isnewline: self.flush(forceline=True)
+                w = font.measure(line)
+                self.line.append((self.cursor_x, line, font, self.vert_align))
+                self.cursor_x += w
+                isnewline = True
+            return
 
-        for x, word, font in self.line:
-            y = baseline - font.metrics("ascent")
-            self.display_list.append((x, y, word, font))
+        for word in tok.text.split():
+            if self.upper == "all":
+                word = word.upper()
+            txt = word
+            if '\N{soft hyphen}' in txt:
+                txt = "".join(word.split('\N{soft hyphen}'))
+            w = font.measure(txt)
+            if self.cursor_x + w > self.width - self.hstep:
+                if self.tryhypenate(font, word):
+                    continue
+                else:
+                    self.flush()
+            self.line.append((self.cursor_x, txt, font, self.vert_align))
+            self.cursor_x += w + space_width
+
+    def tryhypenate(self, font, txt):
+        if '\N{soft hyphen}' in txt:
+            isnewline = False
+            space_width = font.measure(" ")
+            parts = txt.split('\N{soft hyphen}')
+            while parts:
+                failed = True
+                for i in range(0,len(parts)):
+                    partsrange = parts[0:len(parts)-i]
+                    rangetxt = "".join(partsrange)
+                    if len(partsrange) != len(parts):
+                        rangetxt += "-"
+                    w = font.measure(rangetxt)
+                    if self.cursor_x + w > self.width - self.hstep:
+                        continue
+                    failed = False
+                    isnewline = False
+                    self.line.append((self.cursor_x, rangetxt, font, self.vert_align))
+                    self.cursor_x += w
+                    parts = parts[len(parts)-i:]
+                    break
+                if failed:
+                    if isnewline:
+                        # must put at least one fragment to avoid infinite loop
+                        rangetxt = parts[0] + "-"
+                        self.line.append((self.cursor_x, rangetxt, font, self.vert_align))
+                    self.flush() # continue hypenation on next line
+            self.cursor_x += space_width
+            return True
+
+        return False        
+        
+    def flush(self, forceline=False):
+        if not self.line: 
+            if forceline:
+                self.cursor_y += self.lineheight
+            return
+        scaler = 1.25
+        metrics = [font.metrics() for x, word, font, vert in self.line]
+        max_ascent = max([metric["ascent"] for metric in metrics])
+        baseline = self.cursor_y + scaler * max_ascent
+
+        if self.align == "center":
+            horiz_align = ( self.width - self.cursor_x ) // 2
+        elif self.align == "right":
+            horiz_align = self.width - self.cursor_x
+        else:
+            horiz_align = 0
+
+        for x, word, font, valign in self.line:
+            if valign == "top":
+                y = baseline - scaler * max_ascent
+            else:
+                y = baseline - font.metrics("ascent")
+            self.display_list.append((x + horiz_align, y, word, font))
 
         max_descent = max([metric["descent"] for metric in metrics])
-        self.cursor_y = baseline + 1.25 * max_descent
+        self.cursor_y = baseline + scaler * max_descent
+        self.lineheight = (max_descent + max_ascent) * scaler
 
         self.cursor_x = self.hstep
         self.line = []
         self.scroll_bottom = self.cursor_y
 
 
-def get_font(size, weight, style):
+def get_font(family, size, weight, style):
     FONTS = font_cache
-    key = (size, weight, style)
+    key = (family, size, weight, style)
     if key not in FONTS:
         import tkinter.font
-        font = tkinter.font.Font(size=size, weight=weight, slant=style)
+        font = tkinter.font.Font(family=family, size=size, weight=weight, slant=style)
         label = tkinter.Label(font=font)
         FONTS[key] = (font, label)
     return FONTS[key][0]
@@ -564,6 +687,10 @@ def test_URL():
     assert url.host == "example.org"
     assert url.port == 443
     assert url.scheme == "https"
+
+    url = URL("C:\\Users\\someone\\index.html")
+    assert url.scheme == "file"
+    assert url.path == "C:\\Users\\someone\\index.html"
 
 
 if __name__ == "__main__":
