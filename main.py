@@ -28,7 +28,7 @@ class URL:
             self.scheme = "file"
             self.path = url
             return
-        self.scheme, url = url.split("://")
+        self.scheme, url = url.split("://", 1)
         supported = ["http", "https", "file"]
         assert self.scheme in supported
         if self.scheme == "file":
@@ -221,11 +221,15 @@ class URL:
             elif 'no-store' in cache_control:
                 store = False
             elif 'max-age' in cache_control:
-                import time
-                now = time.time()
-                _, n = cache_control.split("=", 1)
-                seconds = int(n)
-                expires = now + seconds * 1000
+                try:
+                    import time
+                    now = time.time()
+                    _, n = cache_control.split("=", 1)
+                    seconds = int(n.strip())
+                    expires = now + seconds * 1000
+                except Exception as err:
+                    print(err)
+                    store = False
             else:
                 # cache control not handled, better not cache
                 store = False
@@ -684,6 +688,11 @@ def test_URL():
     url = URL("https://example.org")
     url = URL("/404.html", parent=url)
     assert url.path == "/404.html"
+    assert url.host == "example.org"
+    assert url.port == 443
+    assert url.scheme == "https"
+
+    url = URL("https://example.org/page?continue=https://example.org/something")
     assert url.host == "example.org"
     assert url.port == 443
     assert url.scheme == "https"
