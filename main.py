@@ -1,5 +1,6 @@
 sock_pool = {}
 http_cache = {}
+font_cache = {}
 http_cache_dir = None
 default_rtl = False
 
@@ -246,6 +247,14 @@ class URL:
 
     def get_cache_key(self) -> str:
         return f'{self.scheme}://{self.host}:{self.port}{self.path}'
+        
+class Text:
+    def __init__(self, text):
+        self.text = text
+
+class Tag:
+    def __init__(self, tag):
+        self.tag = tag
 
 entity_map = {
     '&nbsp;': ' ',
@@ -262,12 +271,14 @@ entity_map = {
     '&reg;': '®',
     '&ndash;': '–',
     '&mdash;': '—',
+    '&#39;': '\'',
 }
 
 def lex(body):
     in_tag = False
     in_entity = False
-    text = ""
+    out = []
+    buffer = ""
     for c in body:
         if c == "&":
             in_entity = True
@@ -277,14 +288,20 @@ def lex(body):
             if c == ";":
                 in_entity = False
                 entity = entity_map.get(entity, entity)
-                text += entity
+                buffer += entity
         elif c == "<":
             in_tag = True
+            if buffer: out.append(Text(buffer))
+            buffer = ""
         elif c == ">":
             in_tag = False
-        elif not in_tag:
-            text += c
-    return text
+            out.append(Tag(buffer))
+            buffer = ""
+        else:
+            buffer += c
+    if not in_tag and buffer:
+        out.append(Text(buffer))
+    return out
 
 
 class CLI:
@@ -305,21 +322,17 @@ class GUI:
         self.canvas = None
         self.scroll = 0
 
-    def browse(self, urlstr, max_redirect=5):
+    def browse(self, url):
+        import tkinter
+
         WIDTH, HEIGHT = 800, 600
         HSTEP, VSTEP = 12, 18
 
-        print("navigating to", urlstr)
-        try:
-            url = URL(urlstr)
-        except Exception as err:
-            import traceback
-            print("Error: failed to parse URL")
-            print(traceback.format_exc())
-            url = URL("about:blank")
+        self.width = WIDTH
+        self.height = HEIGHT
+        self.vstep = VSTEP
+        self.hstep = HSTEP
 
-        result = url.request(max_redirect=max_redirect)
-        import tkinter
         if not self.window:
             print("creating window")
             self.window = tkinter.Tk()
@@ -331,26 +344,41 @@ class GUI:
         if not self.canvas:
             self.canvas = tkinter.Canvas(window, width=WIDTH, height=HEIGHT)
         canvas = self.canvas
+        self.load(url)
 
-        window.title(urlstr)
-        self.text = lex(result)
-        self.width = WIDTH
-        self.height = HEIGHT
-        self.vstep = VSTEP
-        self.hstep = HSTEP
-        # self.display_list, self.scroll_bottom = layout(self.text, WIDTH, HEIGHT, HSTEP, VSTEP, RTL=default_rtl)
-        # self.draw()
-        canvas.pack(fill=tkinter.BOTH, expand=1)
+    def load(self, url):
+        import tkinter
+
+        print("navigating to", url)
+        self.window.title(url)
+        try:
+            url = URL(url)
+        except Exception as err:
+            import traceback
+            print("Error: failed to parse URL")
+            print(traceback.format_exc())
+            url = URL("about:blank")
+            
+        result = url.request(max_redirect=5)
+            
+        self.tokens = lex(result)
+        self.layout()
+        self.draw()
+        self.canvas.pack(fill=tkinter.BOTH, expand=1)
         tkinter.mainloop()
 
     def draw(self):
         import tkinter as tk
+        import tkinter.font
+        canvas = self.canvas
         self.canvas.delete("all")
-
-        for x, y, c in self.display_list:
+        # print(tkinter.font.families())
+      
+        for x, y, c, font in self.display_list:
             if y > self.scroll + self.height: continue
             if y + self.vstep < self.scroll: continue
-            self.canvas.create_text(x, y - self.scroll, text=c)
+            self.canvas.create_text(x, y - self.scroll, text=c, font=font, anchor='nw')
+
         if self.scroll_bottom > self.height:
             pos_0 = self.scroll / self.scroll_bottom
             pos_1 = (self.scroll + self.height) / self.scroll_bottom
@@ -378,60 +406,123 @@ class GUI:
         self.draw()
 
     def limitscrollinbounds(self):
+        if self.scroll + self.height > self.scroll_bottom:
+            self.scroll = self.scroll_bottom - self.height
         if self.scroll < 0:
             self.scroll = 0
-        elif self.scroll + self.height > self.scroll_bottom:
-            self.scroll = self.scroll_bottom - self.height
 
     def configure(self, e):
         self.width = e.width
         self.height = e.height
-        self.display_list, self.scroll_bottom = layout(self.text, self.width, self.height, self.hstep, self.vstep, RTL=default_rtl)
+        self.layout()
         self.limitscrollinbounds()
         self.draw()
 
+    def layout(self):
+        layout = Layout(self.tokens, self.width, self.height, self.hstep, self.vstep)
+        self.display_list = layout.display_list
+        self.scroll_bottom = layout.scroll_bottom
+
+class Layout:
+    def __init__(self, tokens, width, height, hstep, vstep):
+        self.vstep = vstep
+        self.hstep = hstep
+        self.width = width
+        self.height = height
+        self.line = []
+        self.display_list = []
+        self.cursor_x = hstep
+        self.cursor_y = vstep
+        self.weight = "normal"
+        self.style = "roman"
+        self.size = 12
+        self.scroll_bottom = 0
+        for tok in tokens:
+            self.token(tok)
+        self.flush()
+    
+    def token(self, tok):
+        if isinstance(tok, Text):
+            self.word(tok)
+        elif tok.tag == "i":
+            self.style = "italic"
+        elif tok.tag == "/i":
+            self.style = "roman"
+        elif tok.tag == "b":
+            self.weight = "bold"
+        elif tok.tag == "/b":
+            self.weight = "normal"
+        elif tok.tag == "small":
+            self.size -= 2
+        elif tok.tag == "/small":
+            self.size += 2
+        elif tok.tag == "big":
+            self.size += 4
+        elif tok.tag == "/big":
+            self.size -= 4
+        elif tok.tag == "br/":
+            self.flush()
+        elif tok.tag == "/p":
+            self.flush()
+            self.cursor_y += self.vstep
+    
+    def word(self, tok):
+        import tkinter.font
+        font = get_font(self.size, self.weight, self.style)
+        space_width = font.measure(" ")
+        for word in tok.text.split():
+            w = font.measure(word)
+            self.line.append((self.cursor_x, word, font))
+            self.cursor_x += w + space_width
+            if self.cursor_x + w > self.width - self.hstep:
+                self.flush()
+                
+    def flush(self):
+        if not self.line: return
+        metrics = [font.metrics() for x, word, font in self.line]
+        max_ascent = max([metric["ascent"] for metric in metrics])
+        baseline = self.cursor_y + 1.25 * max_ascent
+
+        for x, word, font in self.line:
+            y = baseline - font.metrics("ascent")
+            self.display_list.append((x, y, word, font))
+
+        max_descent = max([metric["descent"] for metric in metrics])
+        self.cursor_y = baseline + 1.25 * max_descent
+
+        self.cursor_x = self.hstep
+        self.line = []
+        self.scroll_bottom = self.cursor_y
 
 
-def layout(text, WIDTH=800, HEIGHT=600, HSTEP=12, VSTEP=18, RTL=False):
-    display_list = []
-    cursor_x, cursor_y = HSTEP, VSTEP
-    x_start = cursor_x
-    line = []
-    for c in text:
-        line.append((cursor_x, cursor_y, c))
-        cursor_x += HSTEP
-        if c == "\n" or cursor_x >= WIDTH - HSTEP:
-            x_end = cursor_x
-            for item in line:
-                if RTL:
-                    x,y,c = item
-                    x=x+WIDTH-x_end
-                    display_list.append((x,y,c))
-                else:
-                    display_list.append(item)
-            line = []
-            cursor_y += VSTEP
-            cursor_x = x_start
-            line_start_at = len(display_list)
-    if line:
-        for item in line:
-            if RTL:
-                x,y,c = item
-                x=x+WIDTH-x_end
-                display_list.append((x,y,c))
-            else:
-                display_list.append(item)
-
-    return display_list, cursor_y + VSTEP
+def get_font(size, weight, style):
+    FONTS = font_cache
+    key = (size, weight, style)
+    if key not in FONTS:
+        import tkinter.font
+        font = tkinter.font.Font(size=size, weight=weight, slant=style)
+        label = tkinter.Label(font=font)
+        FONTS[key] = (font, label)
+    return FONTS[key][0]
 
 
 def test():
     print("run tests")
     test_URL()
+    test_lex()
     test_show()
 
-def test_show():
+def test_lex():
     f = lex
+    lexed = f("<h1>Hi!</h1>")
+    assert len(lexed) == 3
+    assert lexed[0].tag == "h1"
+    assert lexed[1].text == "Hi!"
+    assert lexed[2].tag == "/h1"
+
+
+def test_show():
+    f = lambda x: "".join([y.text for y in lex(x) if isinstance(y, Text)])
     assert f("x") == "x"
     assert f("<h1>Hi!</h1>") == "Hi!"
     assert f("&lt;") == "<"
