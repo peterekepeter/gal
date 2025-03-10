@@ -4,6 +4,7 @@ font_cache = {}
 http_cache_dir = None
 default_rtl = False
 
+
 class URL:
     def __init__(self, url, parent=None):
         if parent:
@@ -36,10 +37,10 @@ class URL:
             self.path = url
         else:
             if "/" not in url:
-                url = url + "/"  
+                url = url + "/"
             self.host, url = url.split("/", 1)
             self.path = "/" + url
-      
+
         if ":" in self.host:
             self.host, port = self.host.split(":", 1)
             self.port = int(port)
@@ -47,7 +48,7 @@ class URL:
             self.port = 80
         elif self.scheme == "https":
             self.port = 443
-    
+
     def request(self, max_redirect=3):
         if self.scheme == "about":
             if self.path == "blank":
@@ -68,10 +69,11 @@ class URL:
     def request_socket(self, max_redirect=3):
         global sock_pool
         global http_cache
-    
+
         if http_cache_dir:
             import os
             import json
+
             if not os.path.isdir(http_cache_dir):
                 os.makedirs(http_cache_dir)
             cache_index = http_cache_dir + "/__cache.json"
@@ -90,6 +92,7 @@ class URL:
             expired = False
             if expires > 0:
                 import time
+
                 if time.time() >= expires:
                     expired = True
             if expired:
@@ -112,9 +115,10 @@ class URL:
         s = None
         f = None
         if key in sock_pool:
-            (s,f) = sock_pool[key] # reuse existing socket
+            (s, f) = sock_pool[key]  # reuse existing socket
         else:
-            import socket # init new TCP/IP connection
+            import socket  # init new TCP/IP connection
+
             s = socket.socket(
                 family=socket.AF_INET,
                 type=socket.SOCK_STREAM,
@@ -122,30 +126,32 @@ class URL:
             )
             s.connect((self.host, self.port))
             if self.scheme == "https":
-                import ssl # need encryption
+                import ssl  # need encryption
+
                 ctx = ssl.create_default_context()
                 s = ctx.wrap_socket(s, server_hostname=self.host)
             f = s.makefile("rb", encoding="utf8", newline="\r\n")
-            
-        method = 'GET'
+
+        method = "GET"
         reqlines = [
-            f'{method} {self.path} HTTP/1.1\r\n',
-            f'Host: {self.host}\r\n',
-            f'Connection: keep-alive\r\n',
-            f'Accept-Encoding: gzip\r\n',
-            '\r\n',
+            f"{method} {self.path} HTTP/1.1\r\n",
+            f"Host: {self.host}\r\n",
+            f"Connection: keep-alive\r\n",
+            f"Accept-Encoding: gzip\r\n",
+            "\r\n",
         ]
         request = "".join(reqlines)
-        bytessent = s.send(request.encode('utf8'))
+        bytessent = s.send(request.encode("utf8"))
         response = f
 
         statusline = response.readline().decode("utf8")
-        version, status, explanation = statusline.split(" ",2)
+        version, status, explanation = statusline.split(" ", 2)
         print(status, explanation.strip(), "GET", self.host, self.path)
         response_headers = {}
         while True:
             line = response.readline().decode("utf8")
-            if line == "\r\n": break
+            if line == "\r\n":
+                break
             header, value = line.split(":", 1)
             response_headers[header.casefold()] = value.strip()
 
@@ -153,7 +159,7 @@ class URL:
         gzip = False
         if "content-encoding" in response_headers:
             content_encoding = response_headers["content-encoding"]
-            assert content_encoding == "gzip" # others not supported
+            assert content_encoding == "gzip"  # others not supported
             gzip = True
 
         if "transfer-encoding" in response_headers:
@@ -162,9 +168,9 @@ class URL:
                 chunked = True
             if "gzip" in transfer_encoding:
                 gzip = True
-            assert "compress" not in transfer_encoding # not supported
-            assert "deflate" not in transfer_encoding # not supported
-            
+            assert "compress" not in transfer_encoding  # not supported
+            assert "deflate" not in transfer_encoding  # not supported
+
         keep_alive = response_headers.get("connection") == "keep-alive"
 
         if chunked:
@@ -179,50 +185,51 @@ class URL:
                 chunks.append(chunk)
                 if chunk_size == 0:
                     is_transfer = False
-            bytes = b''.join(chunks)
+            bytes = b"".join(chunks)
             content_length = len(bytes)
-        elif 'content-length' in response_headers:
-            content_length_str = response_headers['content-length']
+        elif "content-length" in response_headers:
+            content_length_str = response_headers["content-length"]
             content_length = int(content_length_str)
             bytes = response.read(content_length)
             assert len(bytes) == content_length
         else:
             # HTTP/1.0 fallback length unknown -> read until end of socket
-            keep_alive = False 
+            keep_alive = False
             bytes = response.read()
             s.close()
-        
+
         if gzip:
             import gzip
+
             bytes = gzip.decompress(bytes)
             content_length = len(bytes)
 
-        print(response_headers)
-        content = bytes.decode('utf8')
+        content = bytes.decode("utf8")
         code = int(status)
 
         if keep_alive:
-            sock_pool[key] = (s,f)
+            sock_pool[key] = (s, f)
         elif key in sock_pool:
             del sock_pool[key]
 
         if 300 <= code < 400 and max_redirect > 0:
-            location = response_headers.get('location')
+            location = response_headers.get("location")
             if location:
                 url = URL(location, parent=self)
-                content = url.request(max_redirect=max_redirect-1)
+                content = url.request(max_redirect=max_redirect - 1)
 
-        if code == 200 and method == 'GET':
-            cache_control = response_headers.get('cache-control')
+        if code == 200 and method == "GET":
+            cache_control = response_headers.get("cache-control")
             expires = 0
             store = True
             if cache_control == None:
                 pass
-            elif 'no-store' in cache_control:
+            elif "no-store" in cache_control:
                 store = False
-            elif 'max-age' in cache_control:
+            elif "max-age" in cache_control:
                 try:
                     import time
+
                     now = time.time()
                     _, n = cache_control.split("=", 1)
                     seconds = int(n.strip())
@@ -233,7 +240,7 @@ class URL:
             else:
                 # cache control not handled, better not cache
                 store = False
-            
+
             if store:
                 cache_entry = {
                     "expires": expires,
@@ -241,6 +248,7 @@ class URL:
                 http_cache[cache_key] = cache_entry
                 if http_cache_dir:
                     import uuid
+
                     blob_id = str(uuid.uuid4())
                     blob_path = http_cache_dir + "/" + blob_id
                     cache_entry["blob_id"] = blob_id
@@ -250,71 +258,47 @@ class URL:
                         json.dump(http_cache, f, indent=1)
                 else:
                     cache_entry["content"] = content
-        
+
         return content
 
     def get_cache_key(self) -> str:
-        return f'{self.scheme}://{self.host}:{self.port}{self.path}'
-        
+        return f"{self.scheme}://{self.host}:{self.port}{self.path}"
+
+
 class Text:
-    def __init__(self, text):
+    def __init__(self, text, parent):
         self.text = text
+        self.children = []
+        self.parent = parent
 
-class Tag:
-    def __init__(self, tag):
+    def get_text(self):
+        return self.text
+
+    def __repr__(self):
+        return repr(self.text)
+
+
+class Element:
+    def __init__(self, tag, attributes, parent):
         self.tag = tag
+        self.attributes = attributes
+        self.children = []
+        self.parent = parent
 
-entity_map = {
-    '&nbsp;': ' ',
-    '&lt;': '<',
-    '&gt;': '>',
-    '&amp;': '&',
-    '&quot;': '\"',
-    '&apos;': '\'',
-    '&cent;': '¢', 	
-    '&pound;': '£', 	
-    '&yen;': '¥', 	
-    '&euro;': '€', 	
-    '&copy;': '©', 	
-    '&reg;': '®',
-    '&ndash;': '–',
-    '&mdash;': '—',
-    '&#39;': '\'',
-    '&shy;': '­',
-}
+    def get_text(self):
+        return "".join([c.get_text() for c in self.children])
 
-def lex(body):
-    in_tag = False
-    in_entity = False
-    out = []
-    buffer = ""
-    for c in body:
-        if c == "&":
-            in_entity = True
-            entity = "&"
-        elif in_entity:
-            entity += c
-            if c == ";":
-                in_entity = False
-                entity = entity_map.get(entity, entity)
-                buffer += entity
-        elif c == "<":
-            in_tag = True
-            if buffer: out.append(Text(buffer))
-            buffer = ""
-        elif c == ">":
-            in_tag = False
-            out.append(Tag(buffer))
-            buffer = ""
-        else:
-            buffer += c
-    if not in_tag and buffer:
-        out.append(Text(buffer))
-    return out
+    def __repr__(self):
+        return "<" + self.tag + ">"
+
+
+def print_tree(node, indent=0):
+    print(" " * indent, node)
+    for child in node.children:
+        print_tree(child, indent + 2)
 
 
 class CLI:
-
     def browse(self, urlstr, max_redirect=5):
         print("navigating to", urlstr)
         url = URL(urlstr)
@@ -324,8 +308,8 @@ class CLI:
         else:
             print(lex(result))
 
-class GUI:
 
+class GUI:
     def __init__(self):
         self.window = None
         self.canvas = None
@@ -364,37 +348,40 @@ class GUI:
             url = URL(url)
         except Exception as err:
             import traceback
+
             print("Error: failed to parse URL")
             print(traceback.format_exc())
             url = URL("about:blank")
-            
+
         result = url.request(max_redirect=5)
-            
-        self.tokens = lex(result)
+
+        self.nodes = HTMLParser(result).parse()
+        # print_tree(self.nodes)
         self.layout()
         self.draw()
         self.canvas.pack(fill=tkinter.BOTH, expand=1)
         tkinter.mainloop()
 
     def draw(self):
-        import tkinter as tk
-        import tkinter.font
-        canvas = self.canvas
         self.canvas.delete("all")
         # print(tkinter.font.families())
-      
+
         for x, y, c, font in self.display_list:
-            if y > self.scroll + self.height: continue
-            if y + self.vstep < self.scroll: continue
-            self.canvas.create_text(x, y - self.scroll, text=c, font=font, anchor='nw')
+            if y > self.scroll + self.height:
+                continue
+            if y + self.vstep < self.scroll:
+                continue
+            self.canvas.create_text(x, y - self.scroll, text=c, font=font, anchor="nw")
 
         if self.scroll_bottom > self.height:
             pos_0 = self.scroll / self.scroll_bottom
             pos_1 = (self.scroll + self.height) / self.scroll_bottom
             self.canvas.create_rectangle(
-                self.width-8, self.height*pos_0, 
-                self.width, self.height*pos_1, 
-                fill="#000"
+                self.width - 8,
+                self.height * pos_0,
+                self.width,
+                self.height * pos_1,
+                fill="#000",
             )
 
     def scrollup(self, e):
@@ -428,12 +415,13 @@ class GUI:
         self.draw()
 
     def layout(self):
-        layout = Layout(self.tokens, self.width, self.height, self.hstep, self.vstep)
+        layout = Layout(self.nodes, self.width, self.height, self.hstep, self.vstep)
         self.display_list = layout.display_list
         self.scroll_bottom = layout.scroll_bottom
 
+
 class Layout:
-    def __init__(self, tokens, width, height, hstep, vstep):
+    def __init__(self, nodes, width, height, hstep, vstep):
         self.vstep = vstep
         self.hstep = hstep
         self.width = width
@@ -442,100 +430,106 @@ class Layout:
         self.display_list = []
         self.cursor_x = hstep
         self.cursor_y = vstep
-        self.weight = "normal" # bold|normal
-        self.style = "roman" # roman|italic
-        self.align = "auto" # auto|center
+        self.weight = "normal"  # bold|normal
+        self.style = "roman"  # roman|italic
+        self.align = "auto"  # auto|center
         self.vert_align = "baseline"
-        self.whitespace = ''
+        self.whitespace = ""
         self.upper = "normal"
-        self.fontfamily = ''
+        self.fontfamily = ""
         self.size = 12
         self.lineheight = 16
         self.scroll_bottom = 0
-        for tok in tokens:
-            self.token(tok)
-        self.flush()
-    
-    def token(self, tok):
-        if isinstance(tok, Text):
-            self.word(tok)
-        elif tok.tag == "i":
+        self.recurse(nodes)
+
+    def open_tag(self, tag):
+        if tag == "i":
             self.style = "italic"
-        elif tok.tag == "/i":
-            self.style = "roman"
-        elif tok.tag == "b":
+        elif tag == "b":
             self.weight = "bold"
-        elif tok.tag == "/b":
-            self.weight = "normal"
-        elif tok.tag == "small":
+        elif tag == "small":
             self.size -= 2
-        elif tok.tag == "/small":
-            self.size += 2
-        elif tok.tag == "big":
+        elif tag == "big":
             self.size += 4
-        elif tok.tag == "/big":
-            self.size -= 4
-        elif tok.tag == "br/":
+        elif tag == "br/":
             self.flush(forceline=True)
-        elif tok.tag == "p" or tok.tag.startswith("p "):
+        elif tag == "p" or tag.startswith("p "):
             pass
-        elif tok.tag == "/p":
-            self.flush()
             self.cursor_y += self.vstep
-        elif tok.tag == "h1" or tok.tag.startswith("h1 "):
+        elif tag == "h1" or tag.startswith("h1 "):
             self.size = 18
             self.weight = "bold"
             self.align = "center"
-        elif tok.tag == "/h1":
+        elif tag == "h2" or tag.startswith("h2 "):
+            self.size = 16
+            self.weight = "bold"
+        elif tag == "sup":
+            self.size = 8
+            self.vert_align = "top"
+        elif tag == "abbr":
+            self.upper = "all"
+            self.size = 10
+            self.weight = "bold"
+        elif tag == "pre":
+            self.whitespace = "pre"
+            self.fontfamily = "Courier New"
+        elif tag == "code":
+            self.fontfamily = "Courier New"
+
+    def close_tag(self, tag):
+        if tag == "i":
+            self.style = "roman"
+        elif tag == "b":
+            self.weight = "normal"
+        elif tag == "small":
+            self.size += 2
+        elif tag == "big":
+            self.size -= 4
+        elif tag == "p":
+            self.flush()
+            self.cursor_y += self.vstep
+        elif tag == "h1":
             self.flush()
             self.size = 12
             self.weight = "normal"
             self.align = "auto"
             self.cursor_y += self.vstep
-        elif tok.tag == "h2" or tok.tag.startswith("h2 "):
-            self.size = 16
-            self.weight = "bold"
-        elif tok.tag == "/h2":
+        elif tag == "h2":
             self.flush()
             self.size = 12
             self.weight = "normal"
             self.cursor_y += self.vstep
-        elif tok.tag == "sup":
-            self.size = 8
-            self.vert_align = "top"
-        elif tok.tag == "/sup":
+        elif tag == "sup":
             self.size = 12
             self.vert_align = "baseline"
-        elif tok.tag == "abbr":
-            self.upper = "all"
-            self.size = 10
-            self.weight = "bold"
-        elif tok.tag == "/abbr":
+        elif tag == "abbr":
             self.upper = "normal"
             self.size = 12
             self.weight = "normal"
-        elif tok.tag == "pre":
-            self.whitespace = 'pre'
-            self.fontfamily = 'Courier New'
-        elif tok.tag == "/pre":
-            self.whitespace = ''
-            self.fontfamily = ''
-        elif tok.tag == "code":
-            self.fontfamily = 'Courier New'
-        elif tok.tag == "/code":
-            self.fontfamily = ''
-        
-    
+        elif tag == "pre":
+            self.whitespace = ""
+            self.fontfamily = ""
+        elif tag == "code":
+            self.fontfamily = ""
+
+    def recurse(self, tree):
+        if isinstance(tree, Text):
+            self.word(tree)
+        else:
+            self.open_tag(tree.tag)
+            for child in tree.children:
+                self.recurse(child)
+            self.close_tag(tree.tag)
+
     def word(self, tok):
-        import tkinter.font
         font = get_font(self.fontfamily, self.size, self.weight, self.style)
         space_width = font.measure(" ")
-      
+
         if self.whitespace == "pre":
             isnewline = False
             for line in tok.text.split("\n"):
-                print(line)
-                if isnewline: self.flush(forceline=True)
+                if isnewline:
+                    self.flush(forceline=True)
                 w = font.measure(line)
                 self.line.append((self.cursor_x, line, font, self.vert_align))
                 self.cursor_x += w
@@ -546,8 +540,8 @@ class Layout:
             if self.upper == "all":
                 word = word.upper()
             txt = word
-            if '\N{soft hyphen}' in txt:
-                txt = "".join(word.split('\N{soft hyphen}'))
+            if "\N{SOFT HYPHEN}" in txt:
+                txt = "".join(word.split("\N{SOFT HYPHEN}"))
             w = font.measure(txt)
             if self.cursor_x + w > self.width - self.hstep:
                 if self.tryhypenate(font, word):
@@ -558,14 +552,14 @@ class Layout:
             self.cursor_x += w + space_width
 
     def tryhypenate(self, font, txt):
-        if '\N{soft hyphen}' in txt:
+        if "\N{SOFT HYPHEN}" in txt:
             isnewline = False
             space_width = font.measure(" ")
-            parts = txt.split('\N{soft hyphen}')
+            parts = txt.split("\N{SOFT HYPHEN}")
             while parts:
                 failed = True
-                for i in range(0,len(parts)):
-                    partsrange = parts[0:len(parts)-i]
+                for i in range(0, len(parts)):
+                    partsrange = parts[0 : len(parts) - i]
                     rangetxt = "".join(partsrange)
                     if len(partsrange) != len(parts):
                         rangetxt += "-"
@@ -576,21 +570,23 @@ class Layout:
                     isnewline = False
                     self.line.append((self.cursor_x, rangetxt, font, self.vert_align))
                     self.cursor_x += w
-                    parts = parts[len(parts)-i:]
+                    parts = parts[len(parts) - i :]
                     break
                 if failed:
                     if isnewline:
                         # must put at least one fragment to avoid infinite loop
                         rangetxt = parts[0] + "-"
-                        self.line.append((self.cursor_x, rangetxt, font, self.vert_align))
-                    self.flush() # continue hypenation on next line
+                        self.line.append(
+                            (self.cursor_x, rangetxt, font, self.vert_align)
+                        )
+                    self.flush()  # continue hypenation on next line
             self.cursor_x += space_width
             return True
 
-        return False        
-        
+        return False
+
     def flush(self, forceline=False):
-        if not self.line: 
+        if not self.line:
             if forceline:
                 self.cursor_y += self.lineheight
             return
@@ -600,7 +596,7 @@ class Layout:
         baseline = self.cursor_y + scaler * max_ascent
 
         if self.align == "center":
-            horiz_align = ( self.width - self.cursor_x ) // 2
+            horiz_align = (self.width - self.cursor_x) // 2
         elif self.align == "right":
             horiz_align = self.width - self.cursor_x
         else:
@@ -627,10 +623,134 @@ def get_font(family, size, weight, style):
     key = (family, size, weight, style)
     if key not in FONTS:
         import tkinter.font
+
         font = tkinter.font.Font(family=family, size=size, weight=weight, slant=style)
         label = tkinter.Label(font=font)
         FONTS[key] = (font, label)
     return FONTS[key][0]
+
+
+class HTMLParser:
+    ENTITY_MAP = {
+        "&nbsp;": " ",
+        "&lt;": "<",
+        "&gt;": ">",
+        "&amp;": "&",
+        "&quot;": '"',
+        "&apos;": "'",
+        "&cent;": "¢",
+        "&pound;": "£",
+        "&yen;": "¥",
+        "&euro;": "€",
+        "&copy;": "©",
+        "&reg;": "®",
+        "&ndash;": "–",
+        "&mdash;": "—",
+        "&#39;": "'",
+        "&shy;": "­",
+    }
+
+    SELF_CLOSING_TAGS = [
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    ]
+
+    def __init__(self, body):
+        self.body = body
+        self.unfinished = []
+
+    def parse(self):
+        body = self.body
+        in_tag = False
+        in_entity = False
+        text = ""
+        for c in body:
+            if c == "&":
+                in_entity = True
+                entity = "&"
+            elif in_entity:
+                entity += c
+                if c == ";":
+                    in_entity = False
+                    entity = HTMLParser.ENTITY_MAP.get(entity, entity)
+                    text += entity
+            elif c == "<":
+                in_tag = True
+                if text:
+                    self.add_text(text)
+                text = ""
+            elif c == ">":
+                in_tag = False
+                self.add_tag(text)
+                text = ""
+            else:
+                text += c
+        if not in_tag and text:
+            self.add_text(text)
+        return self.finish()
+
+    def add_text(self, text):
+        if text.isspace():
+            return
+        parent = self.unfinished[-1] if self.unfinished else None
+        node = Text(text, parent)
+
+        if self.unfinished:
+            parent.children.append(node)
+        else:
+            self.unfinished.append(node)
+
+    def add_tag(self, tag):
+        tag, attributes = self.get_attributes(tag)
+        if tag.startswith("!"):
+            return
+        if tag.startswith("/"):
+            if len(self.unfinished) == 1:
+                return
+            node = self.unfinished.pop()
+            parent = self.unfinished[-1]
+            parent.children.append(node)
+        elif tag in self.SELF_CLOSING_TAGS:
+            parent = self.unfinished[-1]
+            node = Element(tag, attributes, parent)
+            parent.children.append(node)
+        else:
+            parent = self.unfinished[-1] if self.unfinished else None
+            node = Element(tag, attributes, parent)
+            self.unfinished.append(node)
+
+    def finish(self):
+        while len(self.unfinished) > 1:
+            node = self.unfinished.pop()
+            parent = self.unfinished[-1]
+            parent.children.append(node)
+        return self.unfinished.pop()
+
+    def get_attributes(self, text):
+        parts = text.split()
+        tag = parts[0].casefold()
+        attributes = {}
+        for attrpair in parts[1:]:
+            if "=" in attrpair:
+                key, value = attrpair.split("=", 1)
+                if len(value) > 2 and value[0] in ["'", '"']:
+                    value = value[1:-1]
+                attributes[key.casefold()] = value
+            else:
+                attributes[attrpair.casefold()] = ""
+        return tag, attributes
 
 
 def test():
@@ -639,24 +759,28 @@ def test():
     test_lex()
     test_show()
 
+
 def test_lex():
-    f = lex
-    lexed = f("<h1>Hi!</h1>")
-    assert len(lexed) == 3
-    assert lexed[0].tag == "h1"
-    assert lexed[1].text == "Hi!"
-    assert lexed[2].tag == "/h1"
+    def f(x):
+        return HTMLParser(x).parse()
+
+    dom = f("<h1>Hi!</h1>")
+    assert len(dom.children) == 1
+    assert dom.tag == "h1"
+    assert dom.children[0].text == "Hi!"
 
 
 def test_show():
-    f = lambda x: "".join([y.text for y in lex(x) if isinstance(y, Text)])
+    def f(x):
+        return HTMLParser(x).parse().get_text()
+
     assert f("x") == "x"
     assert f("<h1>Hi!</h1>") == "Hi!"
     assert f("&lt;") == "<"
     assert f("&lt;div&gt;") == "<div>"
 
+
 def test_URL():
-    
     url = URL("http://example.org")
     assert url.scheme == "http"
     assert url.host == "example.org"
@@ -704,6 +828,7 @@ def test_URL():
 
 if __name__ == "__main__":
     import sys
+
     interface = GUI()
     keyname = None
     for arg in sys.argv[1:]:
@@ -711,7 +836,7 @@ if __name__ == "__main__":
             if keyname == "--cache-dir":
                 http_cache_dir = arg
             keyname = None
-        elif arg.startswith('-'):
+        elif arg.startswith("-"):
             flag = arg
             if "--gui" == flag:
                 interface = GUI()
