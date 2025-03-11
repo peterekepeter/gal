@@ -81,8 +81,8 @@ class URL:
                 try:
                     with open(cache_index, "r", encoding="utf8") as f:
                         http_cache = json.load(f)
-                except:
-                    print("Warning: Failed to load cache index")
+                except Exception as err:
+                    print("Warning: Failed to load cache index", err)
                     http_cache = {}
 
         cache_key = self.get_cache_key()
@@ -97,18 +97,22 @@ class URL:
                     expired = True
             if expired:
                 del http_cache[cache_key]
-                if http_cache_dir:
+                if http_cache_dir and "blob_id" in cache_entry:
                     import os
+
+                    blob_id = cache_entry["blob_id"]
                     os.remove(http_cache_dir + "/" + blob_id)
             else:
                 if "content" in cache_entry:
                     content = cache_entry["content"]
+                    print("CACHED GET", cache_key)
                     return content
                 if http_cache_dir and "blob_id" in cache_entry:
                     blob_id = cache_entry["blob_id"]
                     with open(http_cache_dir + "/" + blob_id, "rb") as f:
                         bytes = f.read()
                         content = bytes.decode("utf8")
+                        print("CACHED GET", cache_key)
                         return content
 
         key = (self.scheme, self.host, self.port)
@@ -136,12 +140,14 @@ class URL:
         reqlines = [
             f"{method} {self.path} HTTP/1.1\r\n",
             f"Host: {self.host}\r\n",
-            f"Connection: keep-alive\r\n",
-            f"Accept-Encoding: gzip\r\n",
+            "Connection: keep-alive\r\n",
+            "Accept-Encoding: gzip\r\n",
             "\r\n",
         ]
         request = "".join(reqlines)
-        bytessent = s.send(request.encode("utf8"))
+        bytestosend = request.encode("utf8")
+        bytessent = s.send(bytestosend)
+        assert bytessent == len(bytestosend)
         response = f
 
         statusline = response.readline().decode("utf8")
@@ -172,6 +178,7 @@ class URL:
             assert "deflate" not in transfer_encoding  # not supported
 
         keep_alive = response_headers.get("connection") == "keep-alive"
+        print(response_headers)
 
         if chunked:
             chunks = []
@@ -181,7 +188,7 @@ class URL:
                 chunk_size = int(chunk_size_str, 16)
                 chunk = response.read(chunk_size)
                 assert len(chunk) == chunk_size
-                endline = response.readline()
+                response.readline()  # finish reading line
                 chunks.append(chunk)
                 if chunk_size == 0:
                     is_transfer = False
@@ -222,7 +229,8 @@ class URL:
             cache_control = response_headers.get("cache-control")
             expires = 0
             store = True
-            if cache_control == None:
+            print("cache_control", cache_control)
+            if cache_control is None:
                 pass
             elif "no-store" in cache_control:
                 store = False
@@ -240,6 +248,8 @@ class URL:
             else:
                 # cache control not handled, better not cache
                 store = False
+
+            print("store", store)
 
             if store:
                 cache_entry = {
@@ -306,7 +316,7 @@ class CLI:
         if url.viewsource:
             print(result)
         else:
-            print(lex(result))
+            print(HTMLParser(result).parse().get_text())
 
 
 class GUI:
@@ -336,7 +346,6 @@ class GUI:
         window = self.window
         if not self.canvas:
             self.canvas = tkinter.Canvas(window, width=WIDTH, height=HEIGHT)
-        canvas = self.canvas
         self.load(url)
 
     def load(self, url):
@@ -349,7 +358,7 @@ class GUI:
         except Exception as err:
             import traceback
 
-            print("Error: failed to parse URL")
+            print("Error: failed to parse URL", err)
             print(traceback.format_exc())
             url = URL("about:blank")
 
@@ -667,6 +676,18 @@ class HTMLParser:
         "wbr",
     ]
 
+    HEAD_TAGS = [
+        "base",
+        "basefont",
+        "bgsound",
+        "noscript",
+        "link",
+        "meta",
+        "title",
+        "style",
+        "script",
+    ]
+
     def __init__(self, body):
         self.body = body
         self.unfinished = []
@@ -704,6 +725,7 @@ class HTMLParser:
     def add_text(self, text):
         if text.isspace():
             return
+        self.implicit_tags(None)
         parent = self.unfinished[-1] if self.unfinished else None
         node = Text(text, parent)
 
@@ -716,6 +738,7 @@ class HTMLParser:
         tag, attributes = self.get_attributes(tag)
         if tag.startswith("!"):
             return
+        self.implicit_tags(tag)
         if tag.startswith("/"):
             if len(self.unfinished) == 1:
                 return
@@ -732,6 +755,8 @@ class HTMLParser:
             self.unfinished.append(node)
 
     def finish(self):
+        if not self.unfinished:
+            self.implicit_tags(None)
         while len(self.unfinished) > 1:
             node = self.unfinished.pop()
             parent = self.unfinished[-1]
@@ -752,6 +777,23 @@ class HTMLParser:
                 attributes[attrpair.casefold()] = ""
         return tag, attributes
 
+    def implicit_tags(self, tag):
+        while True:
+            open_tags = [node.tag for node in self.unfinished]
+            if open_tags == [] and tag != "html":
+                self.add_tag("html")
+            elif open_tags == ["html"] and tag not in ["head", "body", "/html"]:
+                if tag in self.HEAD_TAGS:
+                    self.add_tag("head")
+                else:
+                    self.add_tag("body")
+            elif (
+                open_tags == ["html", "head"] and tag not in ["/head"] + self.HEAD_TAGS
+            ):
+                self.add_tag("/head")
+            else:
+                break
+
 
 def test():
     print("run tests")
@@ -766,8 +808,14 @@ def test_lex():
 
     dom = f("<h1>Hi!</h1>")
     assert len(dom.children) == 1
-    assert dom.tag == "h1"
-    assert dom.children[0].text == "Hi!"
+    assert dom.tag == "html"
+    assert len(dom.children[0].children) == 1
+    assert dom.children[0].children[0].tag == "h1"
+    assert dom.children[0].children[0].children[0].text == "Hi!"
+
+    # dom = f("<!-- ><comment>< --><h1>Hi!</h1>")
+    # print_tree(dom)
+    # assert dom.children[0].children[0].children[0].text == "Hi!"
 
 
 def test_show():
@@ -805,7 +853,7 @@ def test_URL():
     assert url.request() == "Hello world!"
 
     url = URL("view-source:http://example.org/")
-    assert url.viewsource == True
+    assert url.viewsource is True
     assert url.scheme == "http"
     assert url.host == "example.org"
 
