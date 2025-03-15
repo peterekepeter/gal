@@ -766,16 +766,19 @@ class HTMLParser:
             return
         self.implicit_tags(tag)
         if tag.startswith("/"):
+            # closing tags
             if len(self.unfinished) == 1:
                 return
             node = self.unfinished.pop()
             parent = self.unfinished[-1]
             parent.children.append(node)
         elif tag in self.SELF_CLOSING_TAGS:
+            # self closing
             parent = self.unfinished[-1]
             node = Element(tag, attributes, parent)
             parent.children.append(node)
         else:
+            # open new tag
             parent = self.unfinished[-1] if self.unfinished else None
             node = Element(tag, attributes, parent)
             self.unfinished.append(node)
@@ -817,8 +820,13 @@ class HTMLParser:
                 open_tags == ["html", "head"] and tag not in ["/head"] + self.HEAD_TAGS
             ):
                 self.add_tag("/head")
+            elif open_tags and open_tags[-1] == tag and tag in ["p", "li"]:
+                self.add_tag("/" + tag)
+            elif open_tags and open_tags[-1] == "li" and tag in ["/ul", "/ol"]:
+                self.add_tag("/li")
             else:
                 break
+    
 
 
 def test():
@@ -840,16 +848,28 @@ def test_HTML_parse_tree():
     assert dom.children[0].children[0].children[0].text == "Hi!"
 
     dom = f("<!-- ><comment>< --><h1>Hi!</h1>")
-    print_tree(dom)
     assert dom.get_text() == "Hi!"
 
     dom = f("<!--> <h1>Hi!</h1> <!-- -->")
     assert dom.get_text() == "Hi!"
-    print_tree(dom)
 
     dom = f("<!---> <h1>Hi!</h1> <!-- -->")
     assert dom.get_text() == "Hi!"
+
+    dom = f("<p>hello<p>world</p>")
+    assert dom.children[0].children[0].tag == "p"
+    assert dom.children[0].children[1].tag == "p"
+
+    dom = f("<li>1st<li>2nd</li>")
+    assert dom.children[0].children[0].tag == "li"
+    assert dom.children[0].children[1].tag == "li"
+
+    dom = f("<ul><li><ul><li>nest1<li>nest2</ul><li>root2</ul>")
     print_tree(dom)
+    assert dom.children[0].children[0].children[0].children[0].children[0].tag == "li"
+    assert dom.children[0].children[0].children[0].children[0].children[1].tag == "li"
+    assert dom.children[0].children[0].children[1].tag == "li"
+
 
 
 
