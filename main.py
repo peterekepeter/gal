@@ -696,9 +696,35 @@ class HTMLParser:
         body = self.body
         in_tag = False
         in_entity = False
+        in_special_tag = False
+        in_comment = False
         text = ""
+        parsed_dash = 0
         for c in body:
-            if c == "&":
+            if in_special_tag:
+                if in_comment:
+                    if c == "-":
+                        parsed_dash -= 1
+                        if parsed_dash < 0:
+                            parsed_dash = 0
+                    elif c == ">" and parsed_dash == 0:
+                        in_comment = False
+                        in_special_tag = False
+                    else:
+                        parsed_dash = 2 # reset
+                else:
+                    if c == "-":
+                        parsed_dash += 1
+                    elif c == ">":
+                        in_special_tag = False
+                    elif parsed_dash == 2:
+                        in_comment = True
+                    else:
+                        parsed_dash = 0  
+            elif in_tag and c == "!":
+                in_special_tag = True
+                parsed_dash = 0
+            elif c == "&":
                 in_entity = True
                 entity = "&"
             elif in_entity:
@@ -798,11 +824,11 @@ class HTMLParser:
 def test():
     print("run tests")
     test_URL()
-    test_lex()
-    test_show()
+    test_HTML_parse_tree()
+    test_HTML_parse_and_get_text()
 
 
-def test_lex():
+def test_HTML_parse_tree():
     def f(x):
         return HTMLParser(x).parse()
 
@@ -813,12 +839,21 @@ def test_lex():
     assert dom.children[0].children[0].tag == "h1"
     assert dom.children[0].children[0].children[0].text == "Hi!"
 
-    # dom = f("<!-- ><comment>< --><h1>Hi!</h1>")
-    # print_tree(dom)
-    # assert dom.children[0].children[0].children[0].text == "Hi!"
+    dom = f("<!-- ><comment>< --><h1>Hi!</h1>")
+    print_tree(dom)
+    assert dom.get_text() == "Hi!"
+
+    dom = f("<!--> <h1>Hi!</h1> <!-- -->")
+    assert dom.get_text() == "Hi!"
+    print_tree(dom)
+
+    dom = f("<!---> <h1>Hi!</h1> <!-- -->")
+    assert dom.get_text() == "Hi!"
+    print_tree(dom)
 
 
-def test_show():
+
+def test_HTML_parse_and_get_text():
     def f(x):
         return HTMLParser(x).parse().get_text()
 
