@@ -377,8 +377,11 @@ class GUI:
 
         result = url.request(max_redirect=5)
 
-        self.nodes = HTMLParser(result).parse()
-        # print_tree(self.nodes)
+        parser_class = HTMLParser if not url.viewsource else HTMLSourceParser
+
+        self.nodes = parser_class(result).parse()
+        print_tree(self.nodes)
+
         self.layout()
         self.draw()
         self.canvas.pack(fill=tkinter.BOTH, expand=1)
@@ -549,7 +552,7 @@ class Layout:
 
         if self.whitespace == "pre":
             isnewline = False
-            for line in tok.text.split("\n"):
+            for line in tok.text.split("\n", ):
                 if isnewline:
                     self.flush(forceline=True)
                 w = font.measure(line)
@@ -788,8 +791,8 @@ class HTMLParser:
             self.add_text(text)
         return self.finish()
 
-    def add_text(self, text):
-        if text.isspace():
+    def add_text(self, text, force=False):
+        if not force and text.isspace():
             return
         self.implicit_tags(None)
         parent = self.unfinished[-1] if self.unfinished else None
@@ -867,6 +870,52 @@ class HTMLParser:
             else:
                 break
 
+
+class HTMLSourceParser(HTMLParser):
+    def parse(self):
+        self.add_tag("pre")
+        text = ""
+        in_tag = False
+        in_quoted_value = False
+        in_special_tag = False
+        quote_type = "'"
+        for c in self.body:
+            if in_tag:
+                if c == "!" and text == "<":
+                    in_special_tag = True
+                    text += c
+                elif in_quoted_value:
+                    if c == quote_type:
+                        in_quoted_value = False
+                    text += c
+                elif c in ["'", '"']:
+                    in_quoted_value = True
+                    quote_type = c
+                    text += c
+                elif c == ">":
+                    text += c
+                    if in_special_tag:
+                        self.add_tag("i")
+                    self.add_text(text, force=True)
+                    if in_special_tag:
+                        self.add_tag("/i")
+                    text = ""
+                    in_tag = False
+                    in_special_tag = False
+                else:
+                    text += c
+            else:
+                # not in tag
+                if c == "<":
+                    self.add_tag("b")
+                    self.add_text(text, force=True)
+                    self.add_tag("/b")
+                    text = c
+                    in_tag = True
+                else:
+                    text += c
+        self.add_tag("/pre")
+        return self.finish()
 
 def test():
     print("run tests")
