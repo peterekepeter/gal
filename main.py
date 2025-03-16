@@ -304,7 +304,7 @@ class Element:
     @property
     def head(self):
         return self.get_child("head")
-    
+
     @property
     def body(self):
         return self.get_child("body")
@@ -313,7 +313,7 @@ class Element:
         for node in self.children:
             if node.tag == tag:
                 return node
-            
+
 
 def print_tree(node, indent=0):
     print(" " * indent, node)
@@ -380,7 +380,7 @@ class GUI:
         parser_class = HTMLParser if not url.viewsource else HTMLSourceParser
 
         self.nodes = parser_class(result).parse()
-        print_tree(self.nodes)
+        # print_tree(self.nodes)
 
         self.layout()
         self.draw()
@@ -552,7 +552,9 @@ class Layout:
 
         if self.whitespace == "pre":
             isnewline = False
-            for line in tok.text.split("\n", ):
+            for line in tok.text.split(
+                "\n",
+            ):
                 if isnewline:
                     self.flush(forceline=True)
                 w = font.measure(line)
@@ -704,6 +706,11 @@ class HTMLParser:
         "script",
     ]
 
+    FORMATTING_TAGS = [
+        "b",
+        "i",
+    ]
+
     def __init__(self, body):
         self.body = body
         self.unfinished = []
@@ -728,7 +735,7 @@ class HTMLParser:
                 if in_script:
                     text += c
                     if text.endswith("</script>"):
-                        text = text[:-9] # remove </script>
+                        text = text[:-9]  # remove </script>
                         self.add_text(text)
                         text = ""
                         in_special_tag = False
@@ -760,7 +767,7 @@ class HTMLParser:
                 in_special_tag = True
                 parsed_dash = 0
                 text = ""
-            elif in_tag and (c == "\"" or c == "'"):
+            elif in_tag and (c == '"' or c == "'"):
                 in_quoted_value = True
                 quote_terminator = c
                 text += c
@@ -810,11 +817,25 @@ class HTMLParser:
         self.implicit_tags(tag)
         if tag.startswith("/"):
             # closing tags
+            name = tag[1:]
+            popped = None
+            while len(self.unfinished) > 1 and self.unfinished[-1].tag != name:
+                if not popped:
+                    popped = []
+                node = self.unfinished.pop()
+                parent = self.unfinished[-1]
+                parent.children.append(node)
+                popped.append(node)
             if len(self.unfinished) == 1:
                 return
             node = self.unfinished.pop()
             parent = self.unfinished[-1]
             parent.children.append(node)
+            # reopen formatting tags
+            if popped:
+                for node in popped:
+                    if node.tag in self.FORMATTING_TAGS:
+                        self.add_tag(node.tag)
         elif tag in self.SELF_CLOSING_TAGS:
             # self closing
             parent = self.unfinished[-1]
@@ -917,6 +938,7 @@ class HTMLSourceParser(HTMLParser):
         self.add_tag("/pre")
         return self.finish()
 
+
 def test():
     print("run tests")
     test_URL()
@@ -964,7 +986,7 @@ def test_HTML_parse_tree():
     assert dom.body.children[0].tag == "p"
     assert dom.head.children[0].children[0].text == "what='<h1>crap</h1>';"
 
-    dom = f("<p class=\"<>\">Parapgrah</p>")
+    dom = f('<p class="<>">Parapgrah</p>')
     assert dom.get_text() == "Parapgrah"
 
     dom = f("<p class='<>'>Parapgrah</p>")
@@ -973,7 +995,12 @@ def test_HTML_parse_tree():
     dom = f("<p <>>badform</p>")
     assert dom.get_text() == ">badform"
 
-
+    dom = f("<b>mis<i>nested</b>tags</i>")
+    print_tree(dom)
+    assert dom.body.children[0].tag == "b"
+    assert dom.body.children[0].children[0].text == "mis"
+    assert dom.body.children[0].children[1].tag == "i"
+    assert dom.body.children[1].tag == "i"
 
 
 def test_HTML_parse_and_get_text():
