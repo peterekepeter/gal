@@ -301,6 +301,19 @@ class Element:
     def __repr__(self):
         return "<" + self.tag + ">"
 
+    @property
+    def head(self):
+        return self.get_child("head")
+    
+    @property
+    def body(self):
+        return self.get_child("body")
+
+    def get_child(self, tag):
+        for node in self.children:
+            if node.tag == tag:
+                return node
+            
 
 def print_tree(node, indent=0):
     print(" " * indent, node)
@@ -695,14 +708,31 @@ class HTMLParser:
     def parse(self):
         body = self.body
         in_tag = False
+        in_quoted_value = False
+        quote_terminator = "'"
         in_entity = False
         in_special_tag = False
         in_comment = False
+        in_script = False
         text = ""
         parsed_dash = 0
         for c in body:
-            if in_special_tag:
-                if in_comment:
+            if in_quoted_value:
+                if c == quote_terminator:
+                    in_quoted_value = False
+                    text += c
+            elif in_special_tag:
+                if in_script:
+                    text += c
+                    if text.endswith("</script>"):
+                        text = text[:-9] # remove </script>
+                        self.add_text(text)
+                        text = ""
+                        in_special_tag = False
+                        in_script = False
+                        in_tag = False
+                        self.add_tag("/script")
+                elif in_comment:
                     if c == "-":
                         parsed_dash -= 1
                         if parsed_dash < 0:
@@ -710,20 +740,27 @@ class HTMLParser:
                     elif c == ">" and parsed_dash == 0:
                         in_comment = False
                         in_special_tag = False
+                        in_tag = False
                     else:
-                        parsed_dash = 2 # reset
+                        parsed_dash = 2  # reset
                 else:
                     if c == "-":
                         parsed_dash += 1
                     elif c == ">":
                         in_special_tag = False
+                        in_tag = False
                     elif parsed_dash == 2:
                         in_comment = True
                     else:
-                        parsed_dash = 0  
+                        parsed_dash = 0
             elif in_tag and c == "!":
                 in_special_tag = True
                 parsed_dash = 0
+                text = ""
+            elif in_tag and (c == "\"" or c == "'"):
+                in_quoted_value = True
+                quote_terminator = c
+                text += c
             elif c == "&":
                 in_entity = True
                 entity = "&"
@@ -733,13 +770,16 @@ class HTMLParser:
                     in_entity = False
                     entity = HTMLParser.ENTITY_MAP.get(entity, entity)
                     text += entity
-            elif c == "<":
+            elif c == "<" and not in_tag:
                 in_tag = True
                 if text:
                     self.add_text(text)
                 text = ""
-            elif c == ">":
+            elif c == ">" and in_tag:
                 in_tag = False
+                if text == "script" or text.startswith("script "):
+                    in_special_tag = True
+                    in_script = True
                 self.add_tag(text)
                 text = ""
             else:
@@ -826,7 +866,6 @@ class HTMLParser:
                 self.add_tag("/li")
             else:
                 break
-    
 
 
 def test():
@@ -844,31 +883,46 @@ def test_HTML_parse_tree():
     assert len(dom.children) == 1
     assert dom.tag == "html"
     assert len(dom.children[0].children) == 1
-    assert dom.children[0].children[0].tag == "h1"
-    assert dom.children[0].children[0].children[0].text == "Hi!"
+    assert dom.body.children[0].tag == "h1"
+    assert dom.body.children[0].children[0].text == "Hi!"
 
     dom = f("<!-- ><comment>< --><h1>Hi!</h1>")
+    assert dom.body.children[0].tag == "h1"
     assert dom.get_text() == "Hi!"
 
     dom = f("<!--> <h1>Hi!</h1> <!-- -->")
+    assert dom.body.children[0].tag == "h1"
     assert dom.get_text() == "Hi!"
 
     dom = f("<!---> <h1>Hi!</h1> <!-- -->")
     assert dom.get_text() == "Hi!"
 
     dom = f("<p>hello<p>world</p>")
-    assert dom.children[0].children[0].tag == "p"
-    assert dom.children[0].children[1].tag == "p"
+    assert dom.body.children[0].tag == "p"
+    assert dom.body.children[1].tag == "p"
 
     dom = f("<li>1st<li>2nd</li>")
-    assert dom.children[0].children[0].tag == "li"
-    assert dom.children[0].children[1].tag == "li"
+    assert dom.body.children[0].tag == "li"
+    assert dom.body.children[1].tag == "li"
 
     dom = f("<ul><li><ul><li>nest1<li>nest2</ul><li>root2</ul>")
-    print_tree(dom)
-    assert dom.children[0].children[0].children[0].children[0].children[0].tag == "li"
-    assert dom.children[0].children[0].children[0].children[0].children[1].tag == "li"
-    assert dom.children[0].children[0].children[1].tag == "li"
+    assert dom.body.children[0].children[0].children[0].children[0].tag == "li"
+    assert dom.body.children[0].children[0].children[0].children[1].tag == "li"
+    assert dom.body.children[0].children[1].tag == "li"
+
+    dom = f("<script>what='<h1>crap</h1>';</script><p>a")
+    assert dom.head.children[0].tag == "script"
+    assert dom.body.children[0].tag == "p"
+    assert dom.head.children[0].children[0].text == "what='<h1>crap</h1>';"
+
+    dom = f("<p class=\"<>\">Parapgrah</p>")
+    assert dom.get_text() == "Parapgrah"
+
+    dom = f("<p class='<>'>Parapgrah</p>")
+    assert dom.get_text() == "Parapgrah"
+
+    dom = f("<p <>>badform</p>")
+    assert dom.get_text() == ">badform"
 
 
 
