@@ -294,6 +294,7 @@ class Element:
         self.attributes = attributes
         self.children = []
         self.parent = parent
+        self.style = {}
 
     def get_text(self):
         return "".join([c.get_text() for c in self.children])
@@ -380,10 +381,11 @@ class GUI:
         parser_class = HTMLParser if not url.viewsource else HTMLSourceParser
 
         self.nodes = parser_class(result).parse()
+        style(self.nodes)
         # print_tree(self.nodes)
 
         self.layout()
-        print_tree(self.document)
+        # print_tree(self.document)
 
         self.draw()
         self.canvas.pack(fill=tkinter.BOTH, expand=1)
@@ -556,22 +558,32 @@ class BlockLayout:
 
     def paint(self):
         cmds = []
-        if isinstance(self.node, Element):
-            if self.node.tag == "pre":
-                x2, y2 = self.x + self.width, self.y + self.height
-                rect = DrawRect(self.x, self.y, x2, y2, "lightgray")
-                cmds.append(rect)
-            elif self.node.tag == "nav":
-                classname = self.node.attributes.get('class')
-                if classname == "links":
-                    x2, y2 = self.x + self.width, self.y + self.height
-                    rect = DrawRect(self.x, self.y, x2, y2, "lightgray")
-                    cmds.append(rect)
 
-            elif self.node.tag == "li":
+        if isinstance(self.node, Element):
+            print(self.node)
+            print(self.node.style)
+            bgcolor = self.node.style.get("background-color", "transparent")
+
+            if bgcolor != "transparent":
+                x2, y2 = self.x + self.width, self.y + self.height
+                rect = DrawRect(self.x, self.y, x2, y2, bgcolor)
+                cmds.append(rect)
+
+            # if self.node.tag == "pre":
+            #     x2, y2 = self.x + self.width, self.y + self.height
+            #     rect = DrawRect(self.x, self.y, x2, y2, "lightgray")
+            #     cmds.append(rect)
+            # elif self.node.tag == "nav":
+            #     classname = self.node.attributes.get("class")
+            #     if classname == "links":
+            #         x2, y2 = self.x + self.width, self.y + self.height
+            #         rect = DrawRect(self.x, self.y, x2, y2, "lightgray")
+            #         cmds.append(rect)
+
+            if self.node.tag == "li":
                 x = self.x - 8
                 y = self.y + 14
-                rect = DrawRect(x-2,y-2,x+2,y+2, "#000")
+                rect = DrawRect(x - 2, y - 2, x + 2, y + 2, "#000")
                 cmds.append(rect)
 
         if self.layout_mode() == "inline":
@@ -583,7 +595,7 @@ class BlockLayout:
     def layout_mode(self):
         if isinstance(self.node, Element):
             if self.node.tag in "head":
-                return "none"   
+                return "none"
         if isinstance(self.node, Text):
             return "inline"
         if isinstance(self.node, list):
@@ -636,9 +648,14 @@ class BlockLayout:
             run_in_next = False
             run_in = False
             for child in self.node.children:
-                if child.tag == "h6":
+                if isinstance(child, Element) and child.tag == "h6":
                     run_in = True
-                if isinstance(child, Element) and child.tag in BLOCK_ELEMENTS and not run_in and not run_in_next:
+                if (
+                    isinstance(child, Element)
+                    and child.tag in BLOCK_ELEMENTS
+                    and not run_in
+                    and not run_in_next
+                ):
                     if group:
                         groups.append(group)
                         group = []
@@ -1202,11 +1219,89 @@ class HTMLSourceParser(HTMLParser):
         return self.finish()
 
 
+class CSSParser:
+    def __init__(self, s):
+        self.s = s
+        self.i = 0
+
+    def whitespace(self):
+        while self.i < len(self.s) and self.s[self.i].isspace():
+            self.i += 1
+
+    def word(self):
+        start = self.i
+        while self.i < len(self.s):
+            if self.s[self.i].isalnum() or self.s[self.i] in "#-.%":
+                self.i += 1
+            else:
+                break
+        if not (self.i > start):
+            raise Exception("Parsing error")
+        return self.s[start : self.i]
+
+    def literal(self, literal):
+        if not (self.i < len(self.s) and self.s[self.i] == literal):
+            raise Exception("Parsing error")
+        self.i += 1
+
+    def pair(self):
+        prop = self.word()
+        self.whitespace()
+        self.literal(":")
+        self.whitespace()
+        val = self.word()
+        return prop.casefold(), val
+
+    def body(self):
+        pairs = {}
+        while self.i < len(self.s):
+            try:
+                prop, val = self.pair()
+                pairs[prop.casefold()] = val
+                self.whitespace
+                self.literal(";")
+                self.whitespace()
+            except Exception:
+                why = self.ignore_until([";"])
+                if why == ";":
+                    self.literal(";")
+                    self.whitespace()
+                else:
+                    break
+        return pairs
+
+    def ignore_until(self, chars):
+        while self.i < len(self.s):
+            if self.s[self.i] in chars:
+                return self.s[self.i]
+            else:
+                self.i += 1
+        return None
+
+def style(node, depth=0):
+    node.style = {}
+    if isinstance(node, Element) and "style" in node.attributes:
+        pairs = CSSParser(node.attributes["style"]).body()
+        for property, value in pairs.items():
+            node.style[property] = value
+    # if (node.style):
+    #     print("   "*depth, node, node.style)
+    for child in node.children:
+        style(child, depth = depth+1)
+
 def test():
     print("run tests")
     test_URL()
+    test_CSS_parse()
     test_HTML_parse_tree()
     test_HTML_parse_and_get_text()
+
+
+def test_CSS_parse():
+    def f(str):
+        return CSSParser(str).body()
+
+    assert f("background:red")["background"] == "red"
 
 
 def test_HTML_parse_tree():
