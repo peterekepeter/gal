@@ -667,9 +667,7 @@ class BlockLayout:
         self.style = "roman"  # roman|italic
         self.align = "auto"  # auto|center
         self.vert_align = "baseline"
-        self.whitespace = ""
         self.upper = "normal"
-        self.fontfamily = ""
         self.size = 12
         self.lineheight = 16
         self.cursor_x = 0
@@ -753,11 +751,6 @@ class BlockLayout:
             self.upper = "all"
             self.size = 10
             self.weight = "bold"
-        elif tag == "pre":
-            self.whitespace = "pre"
-            self.fontfamily = "Courier New"
-        elif tag == "code":
-            self.fontfamily = "Courier New"
 
     def close_tag(self, tag):
         if tag == "p":
@@ -776,11 +769,6 @@ class BlockLayout:
             self.upper = "normal"
             self.size = 12
             self.weight = "normal"
-        elif tag == "pre":
-            self.whitespace = ""
-            self.fontfamily = ""
-        elif tag == "code":
-            self.fontfamily = ""
 
     def recurse(self, tree):
         if isinstance(tree, Text):
@@ -798,11 +786,13 @@ class BlockLayout:
         if style == "normal":
             style = "roman"
         size = int(float(node.style.get("font-size", "16px")[:-2]) * 0.75)
-        font = get_font(self.fontfamily, size, weight, style)
+        font_family = node.style.get("font-family")
+        whitespace = node.style.get("white-space")
+        font = get_font(font_family, size, weight, style)
         color = node.style.get("color", "black")
         space_width = font.measure(" ")
 
-        if self.whitespace == "pre":
+        if whitespace == "pre":
             isnewline = False
             for line in tok.text.split(
                 "\n",
@@ -1099,8 +1089,6 @@ class HTMLParser:
         return self.finish()
 
     def add_text(self, text, force=False):
-        if not force and text.isspace():
-            return
         self.implicit_tags(None)
         parent = self.unfinished[-1] if self.unfinished else None
         node = Text(text, parent)
@@ -1265,14 +1253,20 @@ class CSSParser:
         return rules
 
     def selector(self):
-        out = TagSelector(self.word().casefold())
+        out = self.makeSelector(self.word().casefold())
         self.whitespace()
         while self.i < len(self.s) and self.s[self.i] != "{":
             tag = self.word()
-            descendant = TagSelector(tag.casefold())
+            descendant = self.makeSelector(tag.casefold())
             out = DescendantSelector(out, descendant)
             self.whitespace()
         return out
+
+    def makeSelector(self, s):
+        if s.startswith("."):
+            return ClassSelector(s[1:])
+        else:
+            return TagSelector(s)
 
     def whitespace(self):
         while self.i < len(self.s) and self.s[self.i].isspace():
@@ -1337,7 +1331,9 @@ INHERITED_PROPERTIES = {
     "font-size": "16px",
     "font-style": "normal",
     "font-weight": "normal",
+    "font-family": "",
     "color": "black",
+    "white-space": "normal"
 }
 
 
@@ -1381,10 +1377,24 @@ def cascade_priority(rule):
     return selector.priority
 
 
+class ClassSelector:
+    def __init__(self, class_name):
+        self.class_name = class_name
+        self.priority = 1
+
+    def __repr__(self):
+        return 'ClassSelector'+repr(self.class_name)
+
+    def matches(self, node):
+        return isinstance(node, Element) and self.class_name == node.attributes.get("class", "")
+
 class TagSelector:
     def __init__(self, tag):
         self.tag = tag
         self.priority = 1
+
+    def __repr__(self):
+        return 'TagSelector'+repr(self.tag)
 
     def matches(self, node):
         return isinstance(node, Element) and self.tag == node.tag
@@ -1443,6 +1453,11 @@ def test_CSS_parse():
     assert len(results) == 1
     assert results[0][1]["color"] == "red"
 
+    
+    results = parse(".red { background:red }")
+    assert len(results) == 1
+    assert isinstance(results[0][0], ClassSelector)
+
 
 def test_HTML_parse_tree():
     def f(x):
@@ -1459,11 +1474,11 @@ def test_HTML_parse_tree():
     assert dom.body.children[0].tag == "h1"
     assert dom.get_text() == "Hi!"
 
-    dom = f("<!--> <h1>Hi!</h1> <!-- -->")
+    dom = f("<!--><h1>Hi!</h1><!-- -->")
     assert dom.body.children[0].tag == "h1"
     assert dom.get_text() == "Hi!"
 
-    dom = f("<!---> <h1>Hi!</h1> <!-- -->")
+    dom = f("<!---><h1>Hi!</h1><!-- -->")
     assert dom.get_text() == "Hi!"
 
     dom = f("<p>hello<p>world</p>")

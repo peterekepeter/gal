@@ -4,3 +4,5 @@ i { font-style: italic; }
 b { font-weight: bold; }
 small { font-size: 90%; }
 big { font-size: 110%; }
+code { font-family: Courier; }
+pre { font-family: Courier; white-space: pre; }
