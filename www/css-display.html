@@ -1,0 +1,21 @@
+<div style="background-color: aquamarine;">
+    Block style text
+</div>
+
+<div style="background-color: whitesmoke;">
+    <span>This</span> <span>is</span> <b>inline</b> <span>text</span>
+</div>
+
+<div style="display: none;">
+    This should not be visible!
+</div>
+
+<style>
+    /* Should not be visible */
+    div { background-color: blue; }
+    div .block { display: block; }
+</style>
+<script>
+    /* Should also not be visible */
+    console.log("Hello World!")
+</script>

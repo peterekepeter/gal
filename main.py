@@ -183,7 +183,7 @@ class URL:
             assert "deflate" not in transfer_encoding  # not supported
 
         keep_alive = response_headers.get("connection") == "keep-alive"
-        print(response_headers)
+        # print(response_headers)
 
         if chunked:
             chunks = []
@@ -366,7 +366,7 @@ class GUI:
         if not self.window:
             print("creating window")
             self.window = tkinter.Tk()
-            self.window.bind("<Up>", self.scrollup) 
+            self.window.bind("<Up>", self.scrollup)
             self.window.bind("<Down>", self.scrolldown)
             self.window.bind("<MouseWheel>", self.mousewheel)
             self.window.bind("<Configure>", self.configure)
@@ -537,47 +537,6 @@ class DocumentLayout:
         return f"Document {self.node} {self.x} {self.y} {self.width} {self.height}"
 
 
-BLOCK_ELEMENTS = [
-    "html",
-    "body",
-    "article",
-    "section",
-    "nav",
-    "aside",
-    "h1",
-    "h2",
-    "h3",
-    "h4",
-    "h5",
-    "h6",
-    "hgroup",
-    "header",
-    "footer",
-    "address",
-    "p",
-    "hr",
-    "pre",
-    "blockquote",
-    "ol",
-    "ul",
-    "menu",
-    "li",
-    "dl",
-    "dt",
-    "dd",
-    "figure",
-    "figcaption",
-    "main",
-    "div",
-    "table",
-    "form",
-    "fieldset",
-    "legend",
-    "details",
-    "summary",
-]
-
-
 class BlockLayout:
     def __init__(self, node, parent, previous):
         self.node = node
@@ -588,6 +547,7 @@ class BlockLayout:
         self.y = None
         self.width = None
         self.height = None
+        self.mode = "?"
 
     def set_size(self, w, h):
         self.width = w
@@ -608,58 +568,31 @@ class BlockLayout:
                 rect = DrawRect(self.x, self.y, x2, y2, bgcolor)
                 cmds.append(rect)
 
-            # if self.node.tag == "pre":
-            #     x2, y2 = self.x + self.width, self.y + self.height
-            #     rect = DrawRect(self.x, self.y, x2, y2, "lightgray")
-            #     cmds.append(rect)
-            # elif self.node.tag == "nav":
-            #     classname = self.node.attributes.get("class")
-            #     if classname == "links":
-            #         x2, y2 = self.x + self.width, self.y + self.height
-            #         rect = DrawRect(self.x, self.y, x2, y2, "lightgray")
-            #         cmds.append(rect)
-
             if self.node.tag == "li":
                 x = self.x - 8
                 y = self.y + 14
                 rect = DrawRect(x - 2, y - 2, x + 2, y + 2, "#000")
                 cmds.append(rect)
 
-        if self.layout_mode() == "inline":
-            for x, y, word, font, color in self.display_list:
-                cmds.append(DrawText(x, y, word, font, color))
+        for x, y, word, font, color in self.display_list:
+            cmds.append(DrawText(x, y, word, font, color))
 
         return cmds
 
-    def layout_mode(self):
-        if isinstance(self.node, Element):
-            if self.node.tag in "head":
-                return "none"
-        if isinstance(self.node, Text):
-            return "inline"
-        if isinstance(self.node, list):
-            return "inline"
-        elif any(
-            [
-                isinstance(child, Element) and child.tag in BLOCK_ELEMENTS
-                for child in self.node.children
-            ]
-        ):
-            return "block"
-        elif self.node.children:
-            return "inline"
-        else:
-            return "block"
 
     def layout(self):
+        # calculate start of block
         if self.previous:
             self.y = self.previous.y + self.previous.height
         else:
             self.y = self.parent.y
         self.x = self.parent.x
+
+        # todo move this to browser.css
         if isinstance(self.node, Element):
             if self.node.tag in ["ul", "ol"]:
                 self.x += 48
+
         self.width = self.parent.width
         self.line = []
         self.display_list = []
@@ -672,11 +605,22 @@ class BlockLayout:
         self.lineheight = 16
         self.cursor_x = 0
         self.cursor_y = 0
-        mode = self.layout_mode()
-        if mode == "none":
+        
+        # determine display mode for this block
+        if isinstance(self.node, Element):
+            self.mode = self.node.style.get("display", "inline")
+        elif isinstance(self.node, Text):
+            self.mode = "inline"
+        elif isinstance(self.node, list):
+            self.mode = "inline"
+        else:
+            raise Exception("unreachable layout mode!!")
+
+        if self.mode == "none":
             self.width = 0
             self.height = 0
-        if mode == "block":
+
+        elif self.mode == "block":
             previous = None
 
             # group text-like nodes
@@ -685,11 +629,17 @@ class BlockLayout:
             run_in_next = False
             run_in = False
             for child in self.node.children:
+                child_display = child.style.get("display")
+
+                if child_display == "none":
+                    continue
+
                 if isinstance(child, Element) and child.tag == "h6":
                     run_in = True
+
                 if (
                     isinstance(child, Element)
-                    and child.tag in BLOCK_ELEMENTS
+                    and child_display == "block"
                     and not run_in
                     and not run_in_next
                 ):
@@ -699,6 +649,7 @@ class BlockLayout:
                     groups.append(child)
                 else:
                     group.append(child)
+
                 run_in_next = run_in
                 run_in = False
             if group:
@@ -715,15 +666,19 @@ class BlockLayout:
                         next = BlockLayout(element, self, previous)
                         self.children.append(next)
                         previous = next
+                
                 next = BlockLayout(group, self, previous)
                 self.children.append(next)
                 previous = next
+
+            # recursive block layout
             for child in self.children:
                 child.set_size(self.width, self.height)
                 child.set_step(self.hstep, self.vstep)
                 child.layout()
             self.height = sum([child.height for child in self.children])
-        elif mode == "inline":
+
+        elif self.mode == "inline":
             self.cursor_x = 0
             self.cursor_y = 0
             self.weight = "normal"
@@ -876,7 +831,9 @@ class BlockLayout:
                 y = baseline - scaler * max_ascent
             else:
                 y = baseline - font.metrics("ascent")
-            self.display_list.append((x + horiz_align + self.x, y + self.y, word, font, color))
+            self.display_list.append(
+                (x + horiz_align + self.x, y + self.y, word, font, color)
+            )
 
         max_descent = max([metric["descent"] for metric in metrics])
         self.cursor_y = baseline + scaler * max_descent
@@ -886,7 +843,7 @@ class BlockLayout:
         self.line = []
 
     def __repr__(self):
-        return f"Block {self.node} {self.x} {self.y} {self.width} {self.height}"
+        return f"Block {self.mode} {self.node} {self.x} {self.y} {self.width} {self.height}"
 
 
 def paint_tree(layout_object, display_list):
@@ -1333,7 +1290,7 @@ INHERITED_PROPERTIES = {
     "font-weight": "normal",
     "font-family": "",
     "color": "black",
-    "white-space": "normal"
+    "white-space": "normal",
 }
 
 
@@ -1383,10 +1340,13 @@ class ClassSelector:
         self.priority = 1
 
     def __repr__(self):
-        return 'ClassSelector'+repr(self.class_name)
+        return "ClassSelector" + repr(self.class_name)
 
     def matches(self, node):
-        return isinstance(node, Element) and self.class_name == node.attributes.get("class", "")
+        return isinstance(node, Element) and self.class_name == node.attributes.get(
+            "class", ""
+        )
+
 
 class TagSelector:
     def __init__(self, tag):
@@ -1394,7 +1354,7 @@ class TagSelector:
         self.priority = 1
 
     def __repr__(self):
-        return 'TagSelector'+repr(self.tag)
+        return "TagSelector" + repr(self.tag)
 
     def matches(self, node):
         return isinstance(node, Element) and self.tag == node.tag
@@ -1453,7 +1413,6 @@ def test_CSS_parse():
     assert len(results) == 1
     assert results[0][1]["color"] == "red"
 
-    
     results = parse(".red { background:red }")
     assert len(results) == 1
     assert isinstance(results[0][0], ClassSelector)
