@@ -579,7 +579,6 @@ class BlockLayout:
 
         return cmds
 
-
     def layout(self):
         # calculate start of block
         if self.previous:
@@ -605,7 +604,7 @@ class BlockLayout:
         self.lineheight = 16
         self.cursor_x = 0
         self.cursor_y = 0
-        
+
         # determine display mode for this block
         if isinstance(self.node, Element):
             self.mode = self.node.style.get("display", "inline")
@@ -666,7 +665,7 @@ class BlockLayout:
                         next = BlockLayout(element, self, previous)
                         self.children.append(next)
                         previous = next
-                
+
                 next = BlockLayout(group, self, previous)
                 self.children.append(next)
                 previous = next
@@ -1226,8 +1225,24 @@ class CSSParser:
             return TagSelector(s)
 
     def whitespace(self):
-        while self.i < len(self.s) and self.s[self.i].isspace():
-            self.i += 1
+        L = len(self.s)
+        while self.i < L:
+            if self.s[self.i].isspace():
+                self.i += 1
+            elif self.s[self.i] == "/" and self.i + 1 < L and self.s[self.i + 1] == "*":
+                self.i += 2  # start of comment
+                while self.i < L:
+                    if (
+                        self.s[self.i] == "*"
+                        and self.i + 1 < L
+                        and self.s[self.i + 1] == "/"
+                    ):
+                        self.i += 2
+                        break  # end of comment
+                    else:
+                        self.i += 1
+            else:
+                break
 
     def word(self):
         start = self.i
@@ -1416,6 +1431,15 @@ def test_CSS_parse():
     results = parse(".red { background:red }")
     assert len(results) == 1
     assert isinstance(results[0][0], ClassSelector)
+    assert results[0][0].class_name == "red"
+
+    results = parse("/*.red { background:red }*/")
+    assert len(results) == 0
+
+    results = parse("/*.red { color:red }*/ .bg { color:blue }")
+    assert len(results) == 1
+    assert results[0][0].class_name == "bg"
+    assert results[0][1]["color"] == "blue"
 
 
 def test_HTML_parse_tree():
