@@ -1264,21 +1264,11 @@ class CSSParser:
             )
         self.i += 1
 
-    def pair(self):
-        prop = self.word()
-        self.whitespace()
-        self.literal(":")
-        self.whitespace()
-        val = self.word()
-        return prop.casefold(), val
-
     def body(self):
         pairs = {}
         while self.i < len(self.s):
             try:
-                prop, val = self.pair()
-                pairs[prop.casefold()] = val
-                self.whitespace
+                self.pair(pairs)
                 self.literal(";")
                 self.whitespace()
             except Exception:
@@ -1290,6 +1280,30 @@ class CSSParser:
                     break
         return pairs
 
+    def pair(self, pairs: dict):
+        self.whitespace()
+        prop = self.word()
+        self.whitespace()
+        self.literal(":")
+        self.whitespace()
+        expression = []
+        while self.i < len(self.s) and self.s[self.i] not in [";", "}"]:
+            expression.append(self.word())
+            self.whitespace()
+        prop = prop.casefold()
+        if prop == "font":
+            for item in expression:
+                if item == "italic":
+                    pairs['font-style'] = "italic"
+                elif item == "bold":
+                    pairs['font-weight'] = "bold"
+                elif item.endswith("%"):
+                    pairs['font-size'] = item
+                else:
+                    pairs['font-family'] = item
+        elif len(expression) == 1:
+            pairs[prop] = expression[0]
+            
     def ignore_until(self, chars):
         while self.i < len(self.s):
             if self.s[self.i] in chars:
@@ -1440,6 +1454,12 @@ def test_CSS_parse():
     assert len(results) == 1
     assert results[0][0].class_name == "bg"
     assert results[0][1]["color"] == "blue"
+
+    results = parse("h1 { font: italic bold 100% Times }")
+    assert results[0][1]["font-style"] == "italic"
+    assert results[0][1]["font-weight"] == "bold"
+    assert results[0][1]["font-size"] == "100%"
+    assert results[0][1]["font-family"] == "Times"
 
 
 def test_HTML_parse_tree():
