@@ -422,9 +422,6 @@ class GUI:
                     assert len(node.children) == 1
                     rules.extend(CSSParser(node.get_text()).parse())
 
-
-
-
         style(self.nodes, sorted(rules, key=cascade_priority))
         # print_tree(self.nodes)
 
@@ -1116,7 +1113,29 @@ class HTMLParser:
         return self.unfinished.pop()
 
     def get_attributes(self, text):
-        parts = text.split()
+        
+        part = ""
+        parts = []
+        in_quote = False
+        quote_char = ""
+        for c in text:
+            if in_quote:
+                if c == quote_char:
+                    in_quote = False
+                part += c
+            elif c.isspace():
+                if part:
+                    parts.append(part)
+                    part = ""
+            elif c == "'" or c == '"':
+                in_quote = True
+                quote_char = c
+                part += c
+            else:
+                part += c
+        if part:
+            parts.append(part)
+
         tag = parts[0].casefold()
         attributes = {}
         for attrpair in parts[1:]:
@@ -1531,6 +1550,15 @@ def test_HTML_parse_tree():
     assert dom.body.children[0].children[0].text == "mis"
     assert dom.body.children[0].children[1].tag == "i"
     assert dom.body.children[1].tag == "i"
+
+    dom = f("<div class=x></div>")
+    assert dom.body.children[0].attributes['class'] == "x"
+
+    dom = f("<div class=\"x\"></div>")
+    assert dom.body.children[0].attributes['class'] == "x"
+
+    dom = f("<div style=\"display: none;\"></div>")
+    assert dom.body.children[0].attributes['style'] == "display: none;"
 
 
 def test_HTML_parse_and_get_text():
