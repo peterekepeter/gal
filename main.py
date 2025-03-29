@@ -23,7 +23,7 @@ class URL:
             self.scheme, url = url.split(":", 1)
             self.mimetype, self.content = url.split(",", 1)
             return
-        if url.startswith("/"):
+        if url.startswith("/") and parent:
             self.path = url
             return
         if "://" not in url:
@@ -369,6 +369,8 @@ class GUI:
             self.window.bind("<Up>", self.scrollup)
             self.window.bind("<Down>", self.scrolldown)
             self.window.bind("<MouseWheel>", self.mousewheel)
+            self.window.bind("<Button-4>", self.mousewheelup)
+            self.window.bind("<Button-5>", self.mousewheeldown)
             self.window.bind("<Configure>", self.configure)
         window = self.window
         if not self.canvas:
@@ -404,21 +406,24 @@ class GUI:
 
         # resolve CSS
         rules = default_style_sheet.copy()
-        links = [
-            node.attributes["href"]
-            for node in tree_to_list(self.nodes, [])
-            if isinstance(node, Element)
-            and node.tag == "link"
-            and node.attributes.get("rel") == "stylesheet"
-            and "href" in node.attributes
-        ]
-        for link in links:
-            style_url = URL(link, parent=url)
-            try:
-                body = style_url.request()
-            except Exception:
-                continue
-            rules.extend(CSSParser(body).parse())
+        nodelist = tree_to_list(self.nodes, [])
+        for node in nodelist:
+            if isinstance(node, Element):
+                if node.tag == "link":
+                    if node.attributes.get("rel") == "stylesheet" and "href" in node.attributes:
+                        link = node.attributes["href"]
+                        style_url = URL(link, parent=url)
+                        try:
+                            body = style_url.request()
+                        except Exception:
+                            continue
+                        rules.extend(CSSParser(body).parse())
+                elif node.tag == "style":
+                    assert len(node.children) == 1
+                    rules.extend(CSSParser(node.get_text()).parse())
+
+
+
 
         style(self.nodes, sorted(rules, key=cascade_priority))
         # print_tree(self.nodes)
@@ -472,9 +477,19 @@ class GUI:
         self.draw()
 
     def mousewheel(self, e):
-        self.scroll -= e.delta
+        self.scrollposupdate(e.delta)
+
+    def mousewheelup(self, e):
+        self.scrollposupdate(-100)
+
+    def mousewheeldown(self, e):
+        self.scrollposupdate(+100)
+
+    def scrollposupdate(self, amount=100):
+        self.scroll += amount
         self.limitscrollinbounds()
         self.draw()
+
 
     def limitscrollinbounds(self):
         if self.scroll + self.height > self.scroll_bottom:
@@ -1572,6 +1587,18 @@ def test_URL():
     url = URL("C:\\Users\\someone\\index.html")
     assert url.scheme == "file"
     assert url.path == "C:\\Users\\someone\\index.html"
+
+    url = URL("/home/username/file.html")
+    assert url.scheme == "file"
+    assert url.path == "/home/username/file.html"
+
+    url = URL("./file.html")
+    assert url.scheme == "file"
+    assert url.path == "./file.html"
+
+    url = URL("../file.html")
+    assert url.scheme == "file"
+    assert url.path == "../file.html"
 
     url = URL("https://example.org")
     url = URL("style.css", parent=url)

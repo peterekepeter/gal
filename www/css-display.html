@@ -6,14 +6,13 @@
     <span>This</span> <span>is</span> <b>inline</b> <span>text</span>
 </div>
 
-<div style="display: none;">
-    This should not be visible!
+<div class="hidden-class">
+    This should not be visible because style class.
 </div>
 
 <style>
     /* Should not be visible */
-    div { background-color: blue; }
-    div .block { display: block; }
+    div .hidden-class { display: none; color:red }
 </style>
 <script>
     /* Should also not be visible */
