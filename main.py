@@ -1254,13 +1254,29 @@ class CSSParser:
         out = self.makeSelector(self.word().casefold())
         self.whitespace()
         while self.i < len(self.s) and self.s[self.i] != "{":
-            tag = self.word()
-            descendant = self.makeSelector(tag.casefold())
-            if isinstance(out, DescendantSelector):
-                out.append(descendant)
+            if self.s[self.i] == ":":
+                self.literal(":")
+                word = self.word()
+                self.whitespace()
+                if word == "has":
+                    self.literal("(")
+                    self.whitespace()
+                    tag = self.word().casefold()
+                    self.whitespace()
+                    self.literal(")")
+                    self.whitespace()
+                    musthave = self.makeSelector(tag)
+                    out = HasSelector(out, musthave)
+                else:
+                    continue  # misparse
             else:
-                out = DescendantSelector(out, descendant)
-            self.whitespace()
+                tag = self.word()
+                descendant = self.makeSelector(tag.casefold())
+                if isinstance(out, DescendantSelector):
+                    out.append(descendant)
+                else:
+                    out = DescendantSelector(out, descendant)
+                self.whitespace()
         return out
 
     def makeSelector(self, s):
@@ -1520,6 +1536,26 @@ class SequenceSelector:
         return "SequenceSelector" + repr(self.list)
 
 
+class HasSelector:
+    def __init__(self, base, musthave):
+        self.base = base
+        self.musthave = musthave
+        self.priority = base.priority + musthave.priority
+
+    def matches(self, node):
+        if not self.base.matches(node):
+            return False
+        if not isinstance(node, Element):
+            return False
+        for child in node.children:
+            if self.musthave.matches(child):
+                return True
+        return False
+
+    def __repr__(self):
+        return f"Has({self.base}, {self.musthave})"
+
+
 def test():
     print("run tests")
     test_URL()
@@ -1549,10 +1585,11 @@ def test_CSS_selectors():
     assert matchcount("a a", "<div><a></a></div>") == 0
     assert matchcount("a.red", '<a class="red"></a>') == 1
     assert matchcount("a.blue", '<a class="red"></a>') == 0
+    assert matchcount("a:has(span)", "<a>x</a>") == 0
+    assert matchcount("a:has(span)", "<a><span>x</span></a>") == 1
 
 
 def test_CSS_parse():
-
     def parse(str):
         return CSSParser(str).parse()
 
