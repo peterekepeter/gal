@@ -410,7 +410,10 @@ class GUI:
         for node in nodelist:
             if isinstance(node, Element):
                 if node.tag == "link":
-                    if node.attributes.get("rel") == "stylesheet" and "href" in node.attributes:
+                    if (
+                        node.attributes.get("rel") == "stylesheet"
+                        and "href" in node.attributes
+                    ):
                         link = node.attributes["href"]
                         style_url = URL(link, parent=url)
                         try:
@@ -486,7 +489,6 @@ class GUI:
         self.scroll += amount
         self.limitscrollinbounds()
         self.draw()
-
 
     def limitscrollinbounds(self):
         if self.scroll + self.height > self.scroll_bottom:
@@ -1113,7 +1115,6 @@ class HTMLParser:
         return self.unfinished.pop()
 
     def get_attributes(self, text):
-        
         part = ""
         parts = []
         in_quote = False
@@ -1256,6 +1257,35 @@ class CSSParser:
         return out
 
     def makeSelector(self, s):
+        start = -1
+        inside = False
+        out = None
+        for i in range(0, len(s)):
+            if s[i] == ".":
+                if inside:
+                    out = self.makeLeaftAndAddToSequence(s[start:i], out)
+                start = i
+                inside = True
+            elif not inside and s[i].isalnum():
+                start = i
+                inside = True
+        if inside:
+            out = self.makeLeaftAndAddToSequence(s[start:], out)
+        return out
+
+
+    def makeLeaftAndAddToSequence(self, s, out):
+        node = self.makeLeafSelector(s)
+        if out:
+            if isinstance(out, SequenceSelector):
+                out.append(node)
+            else:
+                out = SequenceSelector([out, node])
+        else:
+            out = node
+        return out
+
+    def makeLeafSelector(self, s):
         if s.startswith("."):
             return ClassSelector(s[1:])
         else:
@@ -1331,16 +1361,16 @@ class CSSParser:
         if prop == "font":
             for item in expression:
                 if item == "italic":
-                    pairs['font-style'] = "italic"
+                    pairs["font-style"] = "italic"
                 elif item == "bold":
-                    pairs['font-weight'] = "bold"
+                    pairs["font-weight"] = "bold"
                 elif item.endswith("%"):
-                    pairs['font-size'] = item
+                    pairs["font-size"] = item
                 else:
-                    pairs['font-family'] = item
+                    pairs["font-family"] = item
         elif len(expression) == 1:
             pairs[prop] = expression[0]
-            
+
     def ignore_until(self, chars):
         while self.i < len(self.s):
             if self.s[self.i] in chars:
@@ -1450,6 +1480,24 @@ class DescendantSelector:
         return "DescendantSelector" + repr(self.list)
 
 
+class SequenceSelector:
+    def __init__(self, list=[]):
+        self.list = list
+
+    def matches(self, node):
+        for sel in self.list:
+            if not sel.matches(node):
+                return False
+        return True
+
+    def append(self, node):
+        self.list.append(node)
+        self.priority += node.priority
+
+    def __repr__(self):
+        return "SequenceSelector" + repr(self.list)
+
+
 def test():
     print("run tests")
     test_URL()
@@ -1458,24 +1506,27 @@ def test():
     test_HTML_parse_and_get_text()
     test_CSS_selectors()
 
+
 def test_CSS_selectors():
     def matchcount(selector, html):
         nodes = HTMLParser(html).parse()
-        css = CSSParser(selector + '{ }').parse()
+        css = CSSParser(selector + "{ }").parse()
         count = 0
         for node in tree_to_list(nodes, []):
             for rule in css:
                 if rule[0].matches(node):
                     count += 1
         return count
-    
-    assert matchcount('a', '<div></div>') == 0
-    assert matchcount('div', '<div></div>') == 1
-    assert matchcount('a', '<a></a><a></a>') == 2
-    assert matchcount('.a', '<div class="a"></div>') == 1
-    assert matchcount('.a', '<div class="b"></div>') == 0
-    assert matchcount('a a', '<a><a></a></a>') == 1
-    assert matchcount('a a', '<div><a></a></div>') == 0
+
+    assert matchcount("a", "<div></div>") == 0
+    assert matchcount("div", "<div></div>") == 1
+    assert matchcount("a", "<a></a><a></a>") == 2
+    assert matchcount(".a", '<div class="a"></div>') == 1
+    assert matchcount(".a", '<div class="b"></div>') == 0
+    assert matchcount("a a", "<a><a></a></a>") == 1
+    assert matchcount("a a", "<div><a></a></div>") == 0
+    assert matchcount("a.red", '<a class="red"></a>') == 1
+    assert matchcount("a.blue", '<a class="red"></a>') == 0
 
 
 def test_CSS_parse():
@@ -1583,13 +1634,13 @@ def test_HTML_parse_tree():
     assert dom.body.children[1].tag == "i"
 
     dom = f("<div class=x></div>")
-    assert dom.body.children[0].attributes['class'] == "x"
+    assert dom.body.children[0].attributes["class"] == "x"
 
-    dom = f("<div class=\"x\"></div>")
-    assert dom.body.children[0].attributes['class'] == "x"
+    dom = f('<div class="x"></div>')
+    assert dom.body.children[0].attributes["class"] == "x"
 
-    dom = f("<div style=\"display: none;\"></div>")
-    assert dom.body.children[0].attributes['style'] == "display: none;"
+    dom = f('<div style="display: none;"></div>')
+    assert dom.body.children[0].attributes["style"] == "display: none;"
 
 
 def test_HTML_parse_and_get_text():
