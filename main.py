@@ -1248,7 +1248,10 @@ class CSSParser:
         while self.i < len(self.s) and self.s[self.i] != "{":
             tag = self.word()
             descendant = self.makeSelector(tag.casefold())
-            out = DescendantSelector(out, descendant)
+            if isinstance(out, DescendantSelector):
+                out.append(descendant)
+            else:
+                out = DescendantSelector(out, descendant)
             self.whitespace()
         return out
 
@@ -1425,18 +1428,26 @@ class TagSelector:
 
 class DescendantSelector:
     def __init__(self, ancestor, descendant):
-        self.ancestor = ancestor
-        self.descendant = descendant
+        self.list = [ancestor, descendant]
         self.priority = ancestor.priority + descendant.priority
 
     def matches(self, node):
-        if not self.descendant.matches(node):
+        i = len(self.list) - 1
+        if not self.list[i].matches(node):
             return False
-        while node.parent:
-            if self.ancestor.matches(node):
-                return True
+        i -= 1
+        while node.parent and i >= 0:
             node = node.parent
-        return False
+            if self.list[i].matches(node):
+                i -= 1
+        return i < 0
+
+    def append(self, node):
+        self.list.append(node)
+        self.priority += node.priority
+
+    def __repr__(self):
+        return "DescendantSelector" + repr(self.list)
 
 
 def test():
@@ -1445,6 +1456,26 @@ def test():
     test_CSS_parse()
     test_HTML_parse_tree()
     test_HTML_parse_and_get_text()
+    test_CSS_selectors()
+
+def test_CSS_selectors():
+    def matchcount(selector, html):
+        nodes = HTMLParser(html).parse()
+        css = CSSParser(selector + '{ }').parse()
+        count = 0
+        for node in tree_to_list(nodes, []):
+            for rule in css:
+                if rule[0].matches(node):
+                    count += 1
+        return count
+    
+    assert matchcount('a', '<div></div>') == 0
+    assert matchcount('div', '<div></div>') == 1
+    assert matchcount('a', '<a></a><a></a>') == 2
+    assert matchcount('.a', '<div class="a"></div>') == 1
+    assert matchcount('.a', '<div class="b"></div>') == 0
+    assert matchcount('a a', '<a><a></a></a>') == 1
+    assert matchcount('a a', '<div><a></a></div>') == 0
 
 
 def test_CSS_parse():
