@@ -1225,15 +1225,22 @@ class CSSParser:
 
     def parse(self):
         rules = []
+        pairs = {}
+        important_pairs = {}
         while self.i < len(self.s):
             try:
                 self.whitespace()
                 selector = self.selector()
                 self.literal("{")
                 self.whitespace()
-                body = self.body()
+                self.body(pairs, important_pairs)
+                if pairs:
+                    rules.append((selector, pairs))
+                    pairs = {}
+                if important_pairs:
+                    rules.append((ImportantSelector(selector), important_pairs))
+                    important_pairs = {}
                 self.literal("}")
-                rules.append((selector, body))
             except Exception:
                 why = self.ignore_until(["}"])
                 if why == "}":
@@ -1273,7 +1280,6 @@ class CSSParser:
             out = self.makeLeaftAndAddToSequence(s[start:], out)
         return out
 
-
     def makeLeaftAndAddToSequence(self, s, out):
         node = self.makeLeafSelector(s)
         if out:
@@ -1290,6 +1296,20 @@ class CSSParser:
             return ClassSelector(s[1:])
         else:
             return TagSelector(s)
+
+    def body(self, pairs: dict, important_pairs: dict):
+        while self.i < len(self.s):
+            try:
+                self.pair(pairs, important_pairs)
+                self.literal(";")
+                self.whitespace()
+            except Exception:
+                why = self.ignore_until([";", "}"])
+                if why == ";":
+                    self.literal(";")
+                    self.whitespace()
+                else:
+                    break
 
     def whitespace(self):
         L = len(self.s)
@@ -1314,7 +1334,7 @@ class CSSParser:
     def word(self):
         start = self.i
         while self.i < len(self.s):
-            if self.s[self.i].isalnum() or self.s[self.i] in "#-.%":
+            if self.s[self.i].isalnum() or self.s[self.i] in "#-.%!":
                 self.i += 1
             else:
                 break
@@ -1331,23 +1351,7 @@ class CSSParser:
             )
         self.i += 1
 
-    def body(self):
-        pairs = {}
-        while self.i < len(self.s):
-            try:
-                self.pair(pairs)
-                self.literal(";")
-                self.whitespace()
-            except Exception:
-                why = self.ignore_until([";", "}"])
-                if why == ";":
-                    self.literal(";")
-                    self.whitespace()
-                else:
-                    break
-        return pairs
-
-    def pair(self, pairs: dict):
+    def pair(self, pairs: dict, important_pairs: dict):
         self.whitespace()
         prop = self.word()
         self.whitespace()
@@ -1357,6 +1361,9 @@ class CSSParser:
         while self.i < len(self.s) and self.s[self.i] not in [";", "}"]:
             expression.append(self.word())
             self.whitespace()
+        if expression[-1] == "!important":
+            pairs = important_pairs  # save to important pairs
+            expression.pop()
         prop = prop.casefold()
         if prop == "font":
             for item in expression:
@@ -1430,6 +1437,18 @@ def cascade_priority(rule):
     return selector.priority
 
 
+class ImportantSelector:
+    def __init__(self, child):
+        self.child = child
+        self.priority = child.priority + 10_000
+
+    def __repr__(self):
+        return "Important'" + repr(self.child)
+
+    def matches(self, node):
+        return self.child.matches(node)
+
+
 class ClassSelector:
     def __init__(self, class_name):
         self.class_name = class_name
@@ -1483,6 +1502,9 @@ class DescendantSelector:
 class SequenceSelector:
     def __init__(self, list=[]):
         self.list = list
+        self.priority = 0
+        for item in list:
+            self.priority += item.priority
 
     def matches(self, node):
         for sel in self.list:
@@ -1510,7 +1532,7 @@ def test():
 def test_CSS_selectors():
     def matchcount(selector, html):
         nodes = HTMLParser(html).parse()
-        css = CSSParser(selector + "{ }").parse()
+        css = CSSParser(selector + "{ color: red }").parse()
         count = 0
         for node in tree_to_list(nodes, []):
             for rule in css:
@@ -1530,10 +1552,6 @@ def test_CSS_selectors():
 
 
 def test_CSS_parse():
-    def body(str):
-        return CSSParser(str).body()
-
-    assert body("background:red")["background"] == "red"
 
     def parse(str):
         return CSSParser(str).parse()
@@ -1548,7 +1566,7 @@ def test_CSS_parse():
     assert len(results) == 1
     assert isinstance(results[0][0], DescendantSelector)
 
-    results = parse("h1 { } h2 { }")
+    results = parse("h1 { color: red } h2 { color: red }")
     assert len(results) == 2
 
     results = parse("p { background:red; asdawdasd }")
@@ -1576,6 +1594,9 @@ def test_CSS_parse():
     assert results[0][1]["font-weight"] == "bold"
     assert results[0][1]["font-size"] == "100%"
     assert results[0][1]["font-family"] == "Times"
+
+    results = parse("div { color: black !important; }")
+    assert results[0][1]["color"] == "black"
 
 
 def test_HTML_parse_tree():
