@@ -335,6 +335,73 @@ def print_tree(node, indent=0):
         print_tree(child, indent + 2)
 
 
+class JsonFileState:
+    def __init__(self, path):
+        self.path = path
+        self.data = None  # initially not laoded
+
+    def load(self):
+        import json
+        import os
+
+        if os.path.isfile(self.path):
+            with open(self.path, "r", encoding="utf8") as f:
+                self.data = json.load(f)
+                return True
+
+        return False
+
+    def save(self):
+        import json
+
+        with open(self.path, "w", encoding="utf8") as f:
+            json.dump(self.data, f, indent=1)
+
+
+class BrowseState:
+    def __init__(self, profile_dir):
+        self.file = JsonFileState(profile_dir + "/__state.json") if profile_dir else None
+        self.data = {}
+        self.dirty = False
+
+    def restore(self):
+        if self.file:
+            if self.file.load():
+                self.data = self.file.data
+
+    def save(self):
+        if self.file and self.dirty:
+            self.file.data = self.data
+            self.file.save()
+            self.dirty = False
+
+    def get_url(self) -> str:
+        return self.data.get("url", "")
+
+    def get_scroll(self) -> int:
+        return self.data.get("scroll", 0)
+
+    def newtab(self, url: str):
+        if self.get_url() != url:
+            print("NEW URL?!!!!!")
+            self.data["url"] = url
+            self.data["scroll"] = 0
+            self.dirty = True
+
+    def set_scroll(self, pos: int):
+        self.data["scroll"] = pos
+        self.dirty = True
+
+    def set_window_size(self, w: int, h: int):
+        self.data["width"] = w
+        self.data["height"] = h
+        self.dirty = True
+
+    def get_window_size(self):
+        return self.data.get("width", 800), self.data.get("height", 600)
+    
+
+
 class CLI:
     def browse(self, urlstr, max_redirect=5):
         print("navigating to", urlstr)
@@ -350,12 +417,21 @@ class GUI:
     def __init__(self):
         self.window = None
         self.canvas = None
+        self.state = None
         self.scroll = 0
 
     def browse(self, url):
+        self.state.browse(url)
+        self.start(self.state)
+        
+    def start(self, state):
+        self.state = state
+        url = self.state.get_url()
+        self.scroll = self.state.get_scroll()
+
         import tkinter
 
-        WIDTH, HEIGHT = 800, 600
+        WIDTH, HEIGHT = state.get_window_size()
         HSTEP, VSTEP = 12, 18
 
         self.width = WIDTH
@@ -376,6 +452,7 @@ class GUI:
         if not self.canvas:
             self.canvas = tkinter.Canvas(window, width=WIDTH, height=HEIGHT, bg="white")
         self.load(url)
+
 
     def load(self, url):
         import tkinter
@@ -433,6 +510,7 @@ class GUI:
 
         self.draw()
         self.canvas.pack(fill=tkinter.BOTH, expand=1)
+        self.state.save()
         tkinter.mainloop()
 
     def draw(self):
@@ -465,16 +543,10 @@ class GUI:
             )
 
     def scrollup(self, e):
-        SCROLL_STEP = 100
-        self.scroll -= SCROLL_STEP
-        self.limitscrollinbounds()
-        self.draw()
+        self.scrollposupdate(-100)
 
     def scrolldown(self, e):
-        SCROLL_STEP = 100
-        self.scroll += SCROLL_STEP
-        self.limitscrollinbounds()
-        self.draw()
+        self.scrollposupdate(+100)
 
     def mousewheel(self, e):
         self.scrollposupdate(e.delta)
@@ -489,6 +561,8 @@ class GUI:
         self.scroll += amount
         self.limitscrollinbounds()
         self.draw()
+        self.state.set_scroll(self.scroll)
+        self.state.save()
 
     def limitscrollinbounds(self):
         if self.scroll + self.height > self.scroll_bottom:
@@ -504,6 +578,8 @@ class GUI:
         self.layout()
         self.limitscrollinbounds()
         self.draw()
+        self.state.set_window_size(self.width, self.height)
+        self.state.save()
 
     def layout(self):
         self.document = DocumentLayout(self.nodes)
@@ -751,6 +827,8 @@ class BlockLayout:
         node = tok
         weight = node.style.get("font-weight", "normal")
         style = node.style.get("font-style", "normal")
+        if style == "inherit":
+            style = "roman" # todo actually inherit
         if style == "normal":
             style = "roman"
         size_str = node.style.get("font-size", "16px")
@@ -760,14 +838,23 @@ class BlockLayout:
             try:
                 size = int(float(size_str[:-2]) * 0.75)
             except Exception as e:
-                print("Failed to parse size",size_str,e)
+                print("Failed to parse size", size_str, e)
                 size = int(16 * 0.75)
 
         font_family = node.style.get("font-family")
         whitespace = node.style.get("white-space")
+        if weight == "400":
+            weight = "normal"
+        if weight == "700":
+            weight = "bold"
         font = get_font(font_family, size, weight, style)
         color = node.style.get("color", "black")
         space_width = font.measure(" ")
+
+        # line = self.children[-1]
+        # previous_word = line.children[-1] if line.children else None
+        # text = TextLayout(node, word, line, previous_word)
+        # line.children.append(text)
 
         if whitespace == "pre":
             isnewline = False
@@ -866,6 +953,23 @@ class BlockLayout:
 
     def __repr__(self):
         return f"Block {self.mode} {self.node} {self.x} {self.y} {self.width} {self.height}"
+
+
+class LineLayout:
+    def __init__(self, node, parent, previous):
+        self.node = node
+        self.parent = parent
+        self.previous = previous
+        self.children = []
+
+
+class TextLayout:
+    def __init__(self, node, word, parent, previous):
+        self.node = node
+        self.word = word
+        self.children = []
+        self.parent = parent
+        self.previous = previous
 
 
 def paint_tree(layout_object, display_list):
@@ -1250,7 +1354,7 @@ class CSSParser:
                     rules.append((ImportantSelector(selector), important_pairs))
                     important_pairs = {}
                 self.literal("}")
-            except Exception: 
+            except Exception:
                 why = self.ignore_until(["}"])
                 if why == "}":
                     self.literal("}")
@@ -1264,7 +1368,7 @@ class CSSParser:
         self.whitespace()
         while self.i < len(self.s) and self.s[self.i] != "{":
             if self.s[self.i] == ",":
-                self.literal(',')
+                self.literal(",")
                 self.whitespace()
                 tag = self.word().casefold()
                 self.whitespace()
@@ -1387,7 +1491,6 @@ class CSSParser:
         self.i += 1
 
     def pair(self, pairs: dict, important_pairs: dict):
-        print("pair")
         self.whitespace()
         prop = self.word()
         self.whitespace()
@@ -1401,7 +1504,6 @@ class CSSParser:
             pairs = important_pairs  # save to important pairs
             expression.pop()
         prop = prop.casefold()
-        print("handle prop", prop)
         if prop == "font":
             for item in expression:
                 if item == "italic":
@@ -1413,7 +1515,6 @@ class CSSParser:
                 else:
                     pairs["font-family"] = item
         elif prop == "background":
-            print("handle background", expression)
             parsed_color = False
             for item in expression:
                 if not parsed_color:
@@ -1457,7 +1558,8 @@ def style(node, rules, depth=0):
             node.style[property] = value
 
     if isinstance(node, Element) and "style" in node.attributes:
-        pairs = CSSParser(node.attributes["style"]).body()
+        pairs = {}
+        CSSParser(node.attributes["style"]).body(pairs, pairs)
         for property, value in pairs.items():
             node.style[property] = value
 
@@ -1831,19 +1933,22 @@ def test_URL():
 if __name__ == "__main__":
     import sys
 
-    interface = GUI()
+    ui = GUI()
+    state = BrowseState(None)
     keyname = None
     for arg in sys.argv[1:]:
         if keyname:
             if keyname == "--cache-dir":
                 http_cache_dir = arg
+                state = BrowseState(http_cache_dir)
+                state.restore()
             keyname = None
         elif arg.startswith("-"):
             flag = arg
             if "--gui" == flag:
-                interface = GUI()
+                ui = GUI()
             elif "--cli" == flag:
-                interface = CLI()
+                ui = CLI()
             elif "--test" == flag:
                 test()
             elif "--version" == flag:
@@ -1858,4 +1963,7 @@ if __name__ == "__main__":
                 print(f"unknown flag '{flag}'")
         else:
             url = arg
-            interface.browse(url)
+            state.newtab(url)
+
+    ui.start(state)
+
