@@ -753,7 +753,16 @@ class BlockLayout:
         style = node.style.get("font-style", "normal")
         if style == "normal":
             style = "roman"
-        size = int(float(node.style.get("font-size", "16px")[:-2]) * 0.75)
+        size_str = node.style.get("font-size", "16px")
+        if size_str == "inherit":
+            size = int(16 * 0.75)
+        else:
+            try:
+                size = int(float(size_str[:-2]) * 0.75)
+            except Exception as e:
+                print("Failed to parse size",size_str,e)
+                size = int(16 * 0.75)
+
         font_family = node.style.get("font-family")
         whitespace = node.style.get("white-space")
         font = get_font(font_family, size, weight, style)
@@ -1241,7 +1250,7 @@ class CSSParser:
                     rules.append((ImportantSelector(selector), important_pairs))
                     important_pairs = {}
                 self.literal("}")
-            except Exception:
+            except Exception: 
                 why = self.ignore_until(["}"])
                 if why == "}":
                     self.literal("}")
@@ -1254,7 +1263,17 @@ class CSSParser:
         out = self.makeSelector(self.word().casefold())
         self.whitespace()
         while self.i < len(self.s) and self.s[self.i] != "{":
-            if self.s[self.i] == ":":
+            if self.s[self.i] == ",":
+                self.literal(',')
+                self.whitespace()
+                tag = self.word().casefold()
+                self.whitespace()
+                sibling = self.makeSelector(tag)
+                if isinstance(out, OrSelector):
+                    out.append(sibling)
+                else:
+                    out = OrSelector([out, sibling])
+            elif self.s[self.i] == ":":
                 self.literal(":")
                 word = self.word()
                 self.whitespace()
@@ -1368,6 +1387,7 @@ class CSSParser:
         self.i += 1
 
     def pair(self, pairs: dict, important_pairs: dict):
+        print("pair")
         self.whitespace()
         prop = self.word()
         self.whitespace()
@@ -1381,6 +1401,7 @@ class CSSParser:
             pairs = important_pairs  # save to important pairs
             expression.pop()
         prop = prop.casefold()
+        print("handle prop", prop)
         if prop == "font":
             for item in expression:
                 if item == "italic":
@@ -1391,6 +1412,13 @@ class CSSParser:
                     pairs["font-size"] = item
                 else:
                     pairs["font-family"] = item
+        elif prop == "background":
+            print("handle background", expression)
+            parsed_color = False
+            for item in expression:
+                if not parsed_color:
+                    pairs["background-color"] = item
+                    parsed_color = True
         elif len(expression) == 1:
             pairs[prop] = expression[0]
 
@@ -1441,8 +1469,6 @@ def style(node, rules, depth=0):
         node_pct = float(node.style["font-size"][:-1]) / 100
         parent_px = float(parent_font_size[:-2])
         node.style["font-size"] = str(node_pct * parent_px) + "px"
-
-    # print("   "*depth, node, node.style)
 
     for child in node.children:
         style(child, rules, depth=depth + 1)
@@ -1556,6 +1582,27 @@ class HasSelector:
         return f"Has({self.base}, {self.musthave})"
 
 
+class OrSelector:
+    def __init__(self, list=[]):
+        self.list = list
+        self.priority = 0
+        for node in list:
+            self.priority = max(self.priority, node.priority)
+
+    def append(self, node):
+        self.list.append(node)
+        self.priority = max(self.priority, node.priority)
+
+    def matches(self, node):
+        for item in self.list:
+            if item.matches(node):
+                return True
+        return False
+
+    def __repr__(self):
+        return f"Or({repr(self.list)})"
+
+
 def test():
     print("run tests")
     test_URL()
@@ -1587,6 +1634,7 @@ def test_CSS_selectors():
     assert matchcount("a.blue", '<a class="red"></a>') == 0
     assert matchcount("a:has(span)", "<a>x</a>") == 0
     assert matchcount("a:has(span)", "<a><span>x</span></a>") == 1
+    assert matchcount("strong,b", "<b></b><strong></strong>") == 2
 
 
 def test_CSS_parse():
@@ -1596,7 +1644,7 @@ def test_CSS_parse():
     results = parse("p { background:red; color:white }")
     assert len(results) == 1
     assert isinstance(results[0][0], TagSelector)
-    assert results[0][1]["background"] == "red"
+    assert results[0][1]["background-color"] == "red"
     assert results[0][1]["color"] == "white"
 
     results = parse("nav li { background:red }")
@@ -1607,7 +1655,7 @@ def test_CSS_parse():
     assert len(results) == 2
 
     results = parse("p { background:red; asdawdasd }")
-    assert results[0][1]["background"] == "red"
+    assert results[0][1]["background-color"] == "red"
 
     results = parse("p*p { color:blue; } h1 { color:red }")
     assert len(results) == 1
@@ -1631,6 +1679,10 @@ def test_CSS_parse():
     assert results[0][1]["font-weight"] == "bold"
     assert results[0][1]["font-size"] == "100%"
     assert results[0][1]["font-family"] == "Times"
+
+    results = parse("h1 { background: #ffffff }")
+    assert isinstance(results[0][0], TagSelector)
+    assert results[0][1]["background-color"] == "#ffffff"
 
     results = parse("div { color: black !important; }")
     assert results[0][1]["color"] == "black"

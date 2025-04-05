@@ -1,7 +1,6 @@
-pre { background-color: lightgray;}
 a { color: blue; }
 i { font-style: italic; }
-b { font-weight: bold; }
+b,strong { font-weight: bold; }
 small { font-size: 90%; }
 big { font-size: 110%; }
 code { font-family: Courier; }
