@@ -447,6 +447,8 @@ class GUI:
             self.window.bind("<MouseWheel>", self.mousewheel)
             self.window.bind("<Button-4>", self.mousewheelup)
             self.window.bind("<Button-5>", self.mousewheeldown)
+            self.window.bind("<Prior>", self.pageup)
+            self.window.bind("<Next>", self.pagedown)
             self.window.bind("<Configure>", self.configure)
         window = self.window
         if not self.canvas:
@@ -542,6 +544,12 @@ class GUI:
                 fill="#000",
             )
 
+    def pageup(self, e):
+        self.scrollposupdate(-self.height)
+
+    def pagedown(self, e):
+        self.scrollposupdate(+self.height)
+
     def scrollup(self, e):
         self.scrollposupdate(-100)
 
@@ -549,7 +557,7 @@ class GUI:
         self.scrollposupdate(+100)
 
     def mousewheel(self, e):
-        self.scrollposupdate(e.delta)
+        self.scrollposupdate(-e.delta)
 
     def mousewheelup(self, e):
         self.scrollposupdate(-100)
