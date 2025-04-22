@@ -360,7 +360,9 @@ class JsonFileState:
 
 class BrowseState:
     def __init__(self, profile_dir):
-        self.file = JsonFileState(profile_dir + "/__state.json") if profile_dir else None
+        self.file = (
+            JsonFileState(profile_dir + "/__state.json") if profile_dir else None
+        )
         self.data = {}
         self.dirty = False
 
@@ -399,7 +401,6 @@ class BrowseState:
 
     def get_window_size(self):
         return self.data.get("width", 800), self.data.get("height", 600)
-    
 
 
 class CLI:
@@ -423,7 +424,7 @@ class GUI:
     def browse(self, url):
         self.state.browse(url)
         self.start(self.state)
-        
+
     def start(self, state):
         self.state = state
         url = self.state.get_url()
@@ -454,7 +455,6 @@ class GUI:
         if not self.canvas:
             self.canvas = tkinter.Canvas(window, width=WIDTH, height=HEIGHT, bg="white")
         self.load(url)
-
 
     def load(self, url):
         import tkinter
@@ -831,12 +831,11 @@ class BlockLayout:
                 self.recurse(child)
             self.close_tag(tree.tag)
 
-    def word(self, tok):
-        node = tok
+    def word(self, node: Text):
         weight = node.style.get("font-weight", "normal")
         style = node.style.get("font-style", "normal")
         if style == "inherit":
-            style = "roman" # todo actually inherit
+            style = "roman"  # todo actually inherit
         if style == "normal":
             style = "roman"
         size_str = node.style.get("font-size", "16px")
@@ -866,18 +865,20 @@ class BlockLayout:
 
         if whitespace == "pre":
             isnewline = False
-            for line in tok.text.split(
+            for line in node.text.split(
                 "\n",
             ):
                 if isnewline:
                     self.flush(forceline=True)
                 w = font.measure(line)
-                self.line.append((self.cursor_x, line, font, self.vert_align, color))
+                self.append_to_current_line(
+                    self.cursor_x, line, font, self.vert_align, color, node
+                )
                 self.cursor_x += w
                 isnewline = True
             return
 
-        for word in tok.text.split():
+        for word in node.text.split():
             if self.upper == "all":
                 word = word.upper()
             txt = word
@@ -885,14 +886,25 @@ class BlockLayout:
                 txt = "".join(word.split("\N{SOFT HYPHEN}"))
             w = font.measure(txt)
             if self.cursor_x + w > self.width:
-                if self.tryhypenate(font, word):
+                if self.tryhypenate(font, word, node):
                     continue
                 else:
                     self.flush()
-            self.line.append((self.cursor_x, txt, font, self.vert_align, color))
+            self.append_to_current_line(
+                self.cursor_x, txt, font, self.vert_align, color, node
+            )
             self.cursor_x += w + space_width
 
-    def tryhypenate(self, font, txt):
+    def append_to_current_line(self, x, txt, font, vert_align, color, node):
+        parent = self.line
+        previous = self.line[-1] if self.line else None
+        text = TextLayout(node, txt, parent, previous, x, font, vert_align, color)
+        self.line.append((x, txt, font, vert_align, color))
+
+    def newline(self):
+        self.flush()
+
+    def tryhypenate(self, font, txt, node):
         if "\N{SOFT HYPHEN}" in txt:
             isnewline = False
             space_width = font.measure(" ")
@@ -909,7 +921,9 @@ class BlockLayout:
                         continue
                     failed = False
                     isnewline = False
-                    self.line.append((self.cursor_x, rangetxt, font, self.vert_align))
+                    self.append_to_current_line(
+                        self.cursor_x, rangetxt, font, self.vert_align, node
+                    )
                     self.cursor_x += w
                     parts = parts[len(parts) - i :]
                     break
@@ -917,8 +931,8 @@ class BlockLayout:
                     if isnewline:
                         # must put at least one fragment to avoid infinite loop
                         rangetxt = parts[0] + "-"
-                        self.line.append(
-                            (self.cursor_x, rangetxt, font, self.vert_align)
+                        self.append_to_current_line(
+                            self.cursor_x, rangetxt, font, self.vert_align, node
                         )
                     self.flush()  # continue hypenation on next line
             self.cursor_x += space_width
@@ -972,7 +986,7 @@ class LineLayout:
 
 
 class TextLayout:
-    def __init__(self, node, word, parent, previous):
+    def __init__(self, node, word, parent, previous, x, font, vert_align, color):
         self.node = node
         self.word = word
         self.children = []
@@ -1974,4 +1988,3 @@ if __name__ == "__main__":
             state.newtab(url)
 
     ui.start(state)
-
