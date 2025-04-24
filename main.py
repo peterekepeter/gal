@@ -2117,7 +2117,7 @@ if __name__ == "__main__":
             elif "--cache-dir" == flag:
                 keyname = flag
             else:
-                print(f"unknown flag '{flag}'")
+                raise Exception(f"unknown flag '{flag}'")
         else:
             url = arg
             state.newtab(url)
