@@ -386,13 +386,29 @@ class BrowserState:
 
     def get_scroll(self) -> int:
         return self.data.get("scroll", 0)
+    
+    def get_history(self) -> dict:
+        return self.data.get("history", None)
 
     def newtab(self, url: str):
         if self.get_url() != url:
+            history = {
+                "url": self.get_url(),
+                "scroll": self.get_scroll(),
+                "history": self.get_history(),
+            }
             print("NEW URL?!!!!!")
             self.data["url"] = url
             self.data["scroll"] = 0
+            self.data["history"] = history 
             self.dirty = True
+
+    def back(self):
+        history = self.get_history()
+        if history:
+            self.data["url"] = history["url"]
+            self.data["scroll"] = history["scroll"]
+            self.data["history"] = history["history"]
 
     def set_scroll(self, pos: int):
         self.data["scroll"] = pos
@@ -431,8 +447,6 @@ class GUI:
 
     def start(self, state):
         self.state = state
-        url = self.state.get_url()
-        self.scroll = self.state.get_scroll()
 
         import tkinter
 
@@ -455,11 +469,18 @@ class GUI:
             self.window.bind("<Button-5>", self.mousewheeldown)
             self.window.bind("<Prior>", self.pageup)
             self.window.bind("<Next>", self.pagedown)
+            self.window.bind("<BackSpace>", self.navigateback)
             self.window.bind("<Configure>", self.configure)
         window = self.window
         if not self.canvas:
             self.canvas = tkinter.Canvas(window, width=WIDTH, height=HEIGHT, bg="white")
-        self.load(url)
+        
+        self.restorestate()
+
+    def restorestate(self):
+        self.scroll = self.state.get_scroll()
+        self.load(self.state.get_url())
+        self.restorestate()
 
     def load(self, url):
         import tkinter
@@ -562,6 +583,10 @@ class GUI:
     def mousewheeldown(self, e):
         self.scrollposupdate(+100)
 
+    def navigateback(self, e):
+        self.state.back()
+        self.restorestate()
+
     def scrollposupdate(self, amount=100):
         self.scroll += amount
         self.limitscrollinbounds()
@@ -599,8 +624,7 @@ class GUI:
                 parent = URL(self.state.get_url())
                 url = URL(elt.attributes["href"], parent=parent).get_str()
                 state.newtab(url)
-                self.scroll = state.get_scroll()
-                self.load(url)
+                self.restorestate()
             elt = elt.parent
 
     def configure(self, e):
