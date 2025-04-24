@@ -278,6 +278,10 @@ class URL:
 
     def get_cache_key(self) -> str:
         return f"{self.scheme}://{self.host}:{self.port}{self.path}"
+    
+    def get_str(self) -> str:
+        return f"{self.scheme}://{self.host}:{self.port}{self.path}"
+
 
 
 class Text:
@@ -358,7 +362,7 @@ class JsonFileState:
             json.dump(self.data, f, indent=1)
 
 
-class BrowseState:
+class BrowserState:
     def __init__(self, profile_dir):
         self.file = (
             JsonFileState(profile_dir + "/__state.json") if profile_dir else None
@@ -418,7 +422,7 @@ class GUI:
     def __init__(self):
         self.window = None
         self.canvas = None
-        self.state: BrowseState = None
+        self.state: BrowserState = None
         self.scroll = 0
 
     def browse(self, url):
@@ -592,9 +596,11 @@ class GUI:
             if isinstance(elt, Text):
                 pass
             elif elt.tag == "a" and "href" in elt.attributes:
-                # TODO resolve relative
-                url = elt.attributes["href"]
-                return self.load(url)
+                parent = URL(self.state.get_url())
+                url = URL(elt.attributes["href"], parent=parent).get_str()
+                state.newtab(url)
+                self.scroll = state.get_scroll()
+                self.load(url)
             elt = elt.parent
 
     def configure(self, e):
@@ -2061,13 +2067,13 @@ if __name__ == "__main__":
     import sys
 
     ui = GUI()
-    state = BrowseState(None)
+    state = BrowserState(None)
     keyname = None
     for arg in sys.argv[1:]:
         if keyname:
             if keyname == "--cache-dir":
                 http_cache_dir = arg
-                state = BrowseState(http_cache_dir)
+                state = BrowserState(http_cache_dir)
                 state.restore()
             keyname = None
         elif arg.startswith("-"):
