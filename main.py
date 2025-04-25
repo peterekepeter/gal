@@ -381,7 +381,7 @@ class BrowserState:
         self.file = (
             JsonFileState(profile_dir + "/__state.json") if profile_dir else None
         )
-        self.data = {}
+        self.data = {"tabs": []}
         self.dirty = False
 
     def restore(self):
@@ -396,37 +396,74 @@ class BrowserState:
             self.dirty = False
 
     def get_url(self) -> str:
-        return self.data.get("url", "")
+        item = self._get_current_item()
+        return item.get("url", "")
 
     def get_scroll(self) -> int:
-        return self.data.get("scroll", 0)
+        item = self._get_current_item()
+        return item.get("scroll", 0)
 
     def get_history(self) -> dict:
-        return self.data.get("history", None)
+        item = self._get_current_item()
+        return item.get("history", None)
 
     def newtab(self, url: str):
-        if self.get_url() != url:
-            history = {
-                "url": self.get_url(),
-                "scroll": self.get_scroll(),
-                "history": self.get_history(),
-            }
-            print("NEW URL?!!!!!")
-            self.data["url"] = url
-            self.data["scroll"] = 0
-            self.data["history"] = history
+        tabs = self.data.get("tabs", [])
+        tabs.append({"url": url})
+        self.data["active_tab_index"] = len(tabs) - 1
+        self.data["tabs"] = tabs
+        self.dirty = True
+
+    def pushlocation(self, url):
+        item = self._get_current_item()
+        to_return_to = self._create_return_item()
+        history_list = item.get("history", [])
+        history_list.append(to_return_to)
+        item["history"] = history_list
+        if "future" in item:
+            item.pop("future")
+        self.replacelocation(url)
+        self.dirty = True
+
+    def replacelocation(self, url):
+        item = self._get_current_item()
+        if item.get("url", "") != url:
+            item["url"] = url
+            if "scroll" in item:
+                item.pop("scroll")
             self.dirty = True
 
     def back(self):
-        history = self.get_history()
+        item = self._get_current_item()
+        history = item.get("history")
         if history:
-            self.data["url"] = history["url"]
-            self.data["scroll"] = history["scroll"]
-            self.data["history"] = history["history"]
+            to_return_to = self._create_return_item()
+            future_list = item.get("future", [])
+            future_list.append(to_return_to)
+            item["future"] = future_list
+            to_restore = history.pop()
+            self._copy_item_locaiton_state(src=to_restore, dst=item)
+            self.dirty = True
+
+    def forward(self):
+        item = self._get_current_item()
+        future = item.get("future")
+        if future:
+            to_return_to = self._create_return_item()
+            list = item.get("history", [])
+            list.append(to_return_to)
+            item["history"] = list
+            to_restore = future.pop()
+            self._copy_item_locaiton_state(src=to_restore, dst=item)
+            self.dirty = True
 
     def set_scroll(self, pos: int):
-        self.data["scroll"] = pos
-        self.dirty = True
+        item = self._get_current_item()
+        if item.get("scroll") != pos:
+            item["scroll"] = pos
+            if pos == 0:
+                item.pop("scroll")
+            self.dirty = True
 
     def set_window_size(self, w: int, h: int):
         self.data["width"] = w
@@ -435,6 +472,58 @@ class BrowserState:
 
     def get_window_size(self):
         return self.data.get("width", 800), self.data.get("height", 600)
+
+    def get_tab_count(self):
+        return len(self.data["tabs"])
+
+    def get_active_tab_index(self):
+        return self.data.get("active_tab_index", 0)
+
+    def set_active_tab_index(self, index):
+        if self.get_active_tab_index() != index:
+            self.data["active_tab_index"] = index
+            self.dirty = True
+            if index == 0:
+                self.data.pop("active_tab_index")
+
+    def switchtab(self, index, relative=False):
+        tab_count = self.get_tab_count()
+        if relative:
+            index += self.get_active_tab_index()
+            if index < 0:
+                index = tab_count - 1
+            if index >= tab_count:
+                index = 0
+        if index >= tab_count:
+            index = tab_count - 1
+        if index < 0:
+            index = 0
+        self.set_active_tab_index(index)
+
+    def _get_current_item(self):
+        if "tabs" in self.data:
+            idx = self.get_active_tab_index()
+            return self.data["tabs"][idx]
+        else:
+            return self.data
+
+    def _create_return_item(self):
+        url = self.get_url()
+        if not url:
+            return None
+        backitem = {"url": url}
+        scroll = self.get_scroll()
+        if scroll:
+            backitem["scroll"] = scroll
+        return backitem
+
+    def _copy_item_locaiton_state(self, src, dst):
+        dst["url"] = src.get("url", "")
+        dst["scroll"] = src.get("scroll", 0)
+        if dst["scroll"] == 0:
+            dst.pop("scroll")
+        if dst["url"] == "":
+            dst.pop("url")
 
 
 class CLI:
@@ -448,16 +537,12 @@ class CLI:
             print(HTMLParser(result).parse().get_text())
 
 
-class GUI:
+class GUIBrowser:
     def __init__(self):
         self.window = None
         self.canvas = None
-        self.state: BrowserState = None
-        self.scroll = 0
-
-    def browse(self, url):
-        self.state.browse(url)
-        self.start(self.state)
+        self.active_tab = None
+        pass
 
     def start(self, state):
         self.state = state
@@ -472,34 +557,120 @@ class GUI:
         self.vstep = VSTEP
         self.hstep = HSTEP
 
-        if not self.window:
-            print("creating window")
-            self.window = tkinter.Tk()
-            self.window.bind("<Up>", self.scrollup)
-            self.window.bind("<Down>", self.scrolldown)
-            self.window.bind("<MouseWheel>", self.mousewheel)
-            self.window.bind("<Button-1>", self.click)
-            self.window.bind("<Button-4>", self.mousewheelup)
-            self.window.bind("<Button-5>", self.mousewheeldown)
-            self.window.bind("<Prior>", self.pageup)
-            self.window.bind("<Next>", self.pagedown)
-            self.window.bind("<BackSpace>", self.navigateback)
-            self.window.bind("<F5>", self.locationreload)
-            self.window.bind("<Configure>", self.configure)
-        window = self.window
-        if not self.canvas:
-            self.canvas = tkinter.Canvas(window, width=WIDTH, height=HEIGHT, bg="white")
-
+        self.window = tkinter.Tk()
+        w = self.window
+        w.bind("<Up>", lambda e: self.scrollposupdate(-100))
+        w.bind("<Down>", lambda e: self.scrollposupdate(+100))
+        w.bind("<MouseWheel>", lambda e: self.scrollposupdate(-e.delta))
+        w.bind("<Button-1>", self.click)
+        w.bind("<Button-4>", lambda e: self.scrollposupdate(-100))
+        w.bind("<Button-5>", lambda e: self.scrollposupdate(+100))
+        w.bind("<Prior>", lambda e: self.scrollposupdate(-self.height + 96))
+        w.bind("<Next>", lambda e: self.scrollposupdate(+self.height - 96))
+        w.bind("<Home>", lambda e: self.scrollposupdate(-1000_000_000))
+        w.bind("<End>", lambda e: self.scrollposupdate(+1000_000_000))
+        w.bind("<Alt-Left>", self.navigateback)
+        w.bind("<Alt-Right>", self.navigateforward)
+        w.bind("<BackSpace>", self.navigateback)
+        w.bind("<Shift-BackSpace>", self.navigateforward)
+        w.bind("<F5>", self.locationreload)
+        w.bind("<Configure>", self.configure)
+        w.bind("<Control-Tab>", lambda e: self.switchtab(+1, relative=True))
+        w.bind("<Control-Shift-Tab>", lambda e: self.switchtab(-1, relative=True))
+        w.bind(
+            "<Control-Shift-KeyPress-Tab>",
+            lambda e: self.switchtab(-1, relative=True),
+        )
+        w.bind("<Control-ISO_Left_Tab>", lambda e: self.switchtab(-1, relative=True))
+        w.bind("<Control-Key-1>", lambda e: self.switchtab(0))
+        w.bind("<Control-Key-2>", lambda e: self.switchtab(1))
+        w.bind("<Control-Key-3>", lambda e: self.switchtab(2))
+        w.bind("<Control-Key-4>", lambda e: self.switchtab(3))
+        w.bind("<Control-Key-5>", lambda e: self.switchtab(4))
+        w.bind("<Control-1>", lambda e: self.switchtab(0))
+        w.bind("<Control-2>", lambda e: self.switchtab(1))
+        w.bind("<Control-3>", lambda e: self.switchtab(2))
+        w.bind("<Control-4>", lambda e: self.switchtab(3))
+        w.bind("<Control-5>", lambda e: self.switchtab(4))
+        w.bind("<Control-6>", lambda e: self.switchtab(5))
+        w.bind("<Control-7>", lambda e: self.switchtab(6))
+        w.bind("<Control-8>", lambda e: self.switchtab(7))
+        w.bind("<Control-9>", lambda e: self.switchtab(-1))
+        self.canvas = tkinter.Canvas(w, width=WIDTH, height=HEIGHT, bg="white")
         self.restorestate()
+        tkinter.mainloop()
+
+    def scrollposupdate(self, amount=100):
+        self.active_tab.scrollposupdate(amount)
+        self.draw()
+
+    def navigateback(self, e):
+        self.state.back()
+        self.restorestate()
+
+    def navigateforward(self, e):
+        self.state.forward()
+        self.restorestate()
+    def locationreload(self, e):
+        self.restorestate()
+
+    def restorestate(self):
+        if not self.active_tab:
+            self.active_tab = GUIBrowserTab(self)
+        self.active_tab.restorestate()
+        self.draw()
+
+    def click(self, e):
+        x, y = e.x, e.y
+        self.active_tab.click(x, y)
+        self.state.save()
+        self.draw()
+
+    def configure(self, e):
+        if self.width == e.width and self.height == e.height:
+            return
+        self.width = e.width
+        self.height = e.height
+        self.active_tab.resize(self.width, self.height)
+        self.draw()
+
+    def draw(self):
+        import tkinter
+
+        # print(tkinter.font.families())
+        self.canvas.delete("all")
+        self.active_tab.draw(self.canvas)
+
+        self.canvas.pack(fill=tkinter.BOTH, expand=1)
+        self.state.save()
+
+    def switchtab(self, index=0, relative=False):
+        self.state.switchtab(index, relative)
+        self.restorestate()
+        self.state.save()
+
+
+class GUIBrowserTab:
+    def __init__(self, browser):
+        self.window = None
+        self.canvas = None
+        self.browser = browser
+        self.width = browser.width
+        self.height = browser.height
+        self.hstep = browser.hstep
+        self.vstep = browser.vstep
+        self.state: BrowserState = browser.state
+        self.scroll = 0
+
+    def browse(self, url):
+        self.state.browse(url)
+        self.start(self.state)
 
     def restorestate(self):
         self.scroll = self.state.get_scroll()
         self.load(self.state.get_url())
-        self.restorestate()
 
     def load(self, url):
-        import tkinter
-
         global default_style_sheet
 
         if default_style_sheet is None:
@@ -508,7 +679,7 @@ class GUI:
                 default_style_sheet = CSSParser(text).parse()
 
         print("navigating to", url)
-        self.window.title(url)
+        self.browser.window.title(url)
         try:
             url = URL(url)
         except Exception as err:
@@ -550,26 +721,18 @@ class GUI:
         self.layout()
         # print_tree(self.document)
 
-        self.draw()
-        self.canvas.pack(fill=tkinter.BOTH, expand=1)
-        self.state.save()
-        tkinter.mainloop()
-
-    def draw(self):
-        self.canvas.delete("all")
-        # print(tkinter.font.families())
-
+    def draw(self, canvas):
         for cmd in self.display_list:
             if cmd.top > self.scroll + self.height:
                 continue
             if cmd.bottom < self.scroll:
                 continue
-            cmd.execute(self.scroll, self.canvas)
+            cmd.execute(self.scroll, canvas)
 
         if self.scroll_bottom > self.height:
             pos_0 = self.scroll / self.scroll_bottom
             pos_1 = (self.scroll + self.height) / self.scroll_bottom
-            self.canvas.create_rectangle(
+            canvas.create_rectangle(
                 self.width - 8,
                 self.height * pos_0,
                 self.width,
@@ -577,38 +740,9 @@ class GUI:
                 fill="#000",
             )
 
-    def pageup(self, e):
-        self.scrollposupdate(-self.height)
-
-    def pagedown(self, e):
-        self.scrollposupdate(+self.height)
-
-    def scrollup(self, e):
-        self.scrollposupdate(-100)
-
-    def scrolldown(self, e):
-        self.scrollposupdate(+100)
-
-    def mousewheel(self, e):
-        self.scrollposupdate(-e.delta)
-
-    def mousewheelup(self, e):
-        self.scrollposupdate(-100)
-
-    def mousewheeldown(self, e):
-        self.scrollposupdate(+100)
-
-    def navigateback(self, e):
-        self.state.back()
-        self.restorestate()
-
-    def locationreload(self, e):
-        self.restorestate()
-
     def scrollposupdate(self, amount=100):
         self.scroll += amount
         self.limitscrollinbounds()
-        self.draw()
         self.state.set_scroll(self.scroll)
         self.state.save()
 
@@ -618,8 +752,7 @@ class GUI:
         if self.scroll < 0:
             self.scroll = 0
 
-    def click(self, e):
-        x, y = e.x, e.y
+    def click(self, x, y):
         y += self.scroll
 
         objs = [
@@ -641,18 +774,17 @@ class GUI:
             elif elt.tag == "a" and "href" in elt.attributes:
                 parent = URL(self.state.get_url())
                 url = URL(elt.attributes["href"], parent=parent).get_str()
-                state.newtab(url)
+                state.pushlocation(url)
                 self.restorestate()
             elt = elt.parent
 
-    def configure(self, e):
-        if self.width == e.width and self.height == e.height:
+    def resize(self, width, height):
+        if self.width == width and self.height == height:
             return
-        self.width = e.width
-        self.height = e.height
+        self.width = width
+        self.height = height
         self.layout()
         self.limitscrollinbounds()
-        self.draw()
         self.state.set_window_size(self.width, self.height)
         self.state.save()
 
@@ -902,12 +1034,17 @@ class BlockLayout:
 
     def word(self, node: Text):
         # TODO remove duplicate, this should be part of TextLayout
-        weight = node.style.get("font-weight", "normal")
+
+        # parse font style
         style = node.style.get("font-style", "normal")
         if style == "inherit":
             style = "roman"  # todo actually inherit
-        if style == "normal":
-            style = "roman"
+        elif style == "oblique" or style == "italic":
+            style = "italic"  # tk inter only supports
+        else:
+            style = "roman"  # normal style and default to roman
+
+        # parse font size
         size_str = node.style.get("font-size", "16px")
         if size_str == "inherit":
             size = int(16 * 0.75)
@@ -919,10 +1056,16 @@ class BlockLayout:
                 size = int(16 * 0.75)
 
         font_family = node.style.get("font-family")
-        if weight == "400":
-            weight = "normal"
-        if weight == "700":
+
+        # parse font weight
+        weight = "normal"
+        font_weight = node.style.get("font-weight", "normal")
+        if font_weight.isnumeric():
+            if int(font_weight) >= 500:
+                weight = "bold"
+        elif font_weight == "bold":
             weight = "bold"
+
         font = get_font(font_family, size, weight, style)
         color = node.style.get("color", "black")
         space_width = font.measure(" ")
@@ -1095,12 +1238,16 @@ class TextLayout:
     def layout(self):
         node = self.node
 
-        weight = node.style.get("font-weight", "normal")
+        # parse font style
         style = node.style.get("font-style", "normal")
         if style == "inherit":
             style = "roman"  # todo actually inherit
-        if style == "normal":
-            style = "roman"
+        elif style == "oblique" or style == "italic":
+            style = "italic"  # tk inter only supports
+        else:
+            style = "roman"  # normal style and default to roman
+
+        # parse font size
         size_str = node.style.get("font-size", "16px")
         if size_str == "inherit":
             size = int(16 * 0.75)
@@ -1112,11 +1259,16 @@ class TextLayout:
                 size = int(16 * 0.75)
 
         font_family = node.style.get("font-family")
-        whitespace = node.style.get("white-space")
-        if weight == "400":
-            weight = "normal"
-        if weight == "700":
+
+        # parse font weight
+        weight = "normal"
+        font_weight = node.style.get("font-weight", "normal")
+        if font_weight.isnumeric():
+            if int(font_weight) >= 500:
+                weight = "bold"
+        elif font_weight == "bold":
             weight = "bold"
+
         font = get_font(font_family, size, weight, style)
         self.color = node.style.get("color", "black")
         space_width = font.measure(" ")
@@ -1880,6 +2032,7 @@ def test():
     test_HTML_parse_tree()
     test_HTML_parse_and_get_text()
     test_CSS_selectors()
+    test_BrowserState()
 
 
 def test_CSS_selectors():
@@ -2104,10 +2257,78 @@ def test_URL():
     assert url.path == "www/block.html"
 
 
+def test_BrowserState():
+    # 3 tabs to work with
+    state = BrowserState(None)
+    assert state.get_tab_count() == 0
+    state.newtab("about:blank")
+    assert state.get_tab_count() == 1
+    state.newtab("about:config")
+    assert state.get_tab_count() == 2
+    state.newtab("about:test")
+    assert state.get_tab_count() == 3
+    assert state.get_active_tab_index() == 2
+    assert state.get_url() == "about:test"
+
+    # check relative switch wraparound
+    state.switchtab(1, relative=True)
+    assert state.get_active_tab_index() == 0
+    state.switchtab(-1, relative=True)
+    assert state.get_active_tab_index() == 2
+    state.switchtab(-1, relative=True)
+    assert state.get_active_tab_index() == 1
+
+    # check clamping of absolute value
+    state.switchtab(-1)
+    assert state.get_active_tab_index() == 0
+    state.switchtab(0)
+    assert state.get_active_tab_index() == 0
+    state.switchtab(1)
+    assert state.get_active_tab_index() == 1
+    state.switchtab(2)
+    assert state.get_active_tab_index() == 2
+    state.switchtab(3)
+    assert state.get_active_tab_index() == 2
+
+    # check scroll is local to tab
+    state.switchtab(0)
+    state.set_scroll(100)
+    state.switchtab(1)
+    state.set_scroll(200)
+    assert state.get_scroll() == 200
+    state.switchtab(0)
+    assert state.get_scroll() == 100
+
+    # check pushlocation & back & forward
+    state.switchtab(0)
+    state.pushlocation("https://example.com")
+    assert state.get_url() == "https://example.com"
+    state.back()
+    assert state.get_url() == "about:blank"
+    state.forward()
+    assert state.get_url() == "https://example.com"
+
+    # each tab has own history
+    state.switchtab(1)
+    state.pushlocation("https://other.com")
+    assert state.get_url() == "https://other.com"
+    state.switchtab(0)
+    assert state.get_url() == "https://example.com"
+    state.switchtab(1)
+    state.back()
+    assert state.get_url() == "about:config"
+
+    # futures deleted after pushlocation
+    state.pushlocation("https://another.com")
+    state.forward()
+    assert state.get_url() == "https://another.com"
+
+
+
 if __name__ == "__main__":
     import sys
 
-    ui = GUI()
+    ui = GUIBrowser()
     state = BrowserState(None)
     parsearg = None
     for arg in sys.argv[1:]:
@@ -2120,7 +2341,7 @@ if __name__ == "__main__":
         elif arg.startswith("-"):
             flag = arg
             if "--gui" == flag:
-                ui = GUI()
+                ui = GUIBrowser()
             elif "--cli" == flag:
                 ui = CLI()
             elif "--test" == flag:
