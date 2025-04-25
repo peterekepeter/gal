@@ -2,6 +2,7 @@ sock_pool = {}
 http_cache = {}
 font_cache = {}
 http_cache_dir = None
+http_cache_blob_dir = None
 default_rtl = False
 default_style_sheet = None
 
@@ -10,8 +11,11 @@ class URL:
     def __init__(self, url, parent=None):
         if parent:
             self.scheme = parent.scheme
-            self.host = parent.host
-            self.port = parent.port
+            self.path = parent.path
+            if hasattr(parent, "host"):
+                self.host = parent.host
+            if hasattr(parent, "port"):
+                self.port = parent.port
         self.viewsource = False
         if url.startswith("view-source:"):
             url = url[12:]
@@ -27,12 +31,17 @@ class URL:
             self.path = url
             return
         if "://" not in url:
-            if parent is None:
-                self.scheme = "file"
+            if parent and not url.startswith("/"):
+                self.path = "/".join(self.path.split("/")[:-1] + [url])
+                if self.path.startswith("./"):
+                    self.path = self.path[2:]
             else:
-                if "/" not in url:
-                    url = "/" + url
-            self.path = url
+                if parent is None:
+                    self.scheme = "file"
+                else:
+                    if "/" not in url:
+                        url = "/" + url
+                self.path = url
             return
         self.scheme, url = url.split("://", 1)
         supported = ["http", "https", "file"]
@@ -74,13 +83,17 @@ class URL:
     def request_socket(self, max_redirect=3):
         global sock_pool
         global http_cache
+        global http_cache_blob_dir
 
         if http_cache_dir:
             import os
             import json
 
-            if not os.path.isdir(http_cache_dir):
-                os.makedirs(http_cache_dir)
+            http_cache_blob_dir = http_cache_dir + "/cache"
+
+            if not os.path.isdir(http_cache_blob_dir):
+                os.makedirs(http_cache_blob_dir)
+
             cache_index = http_cache_dir + "/__cache.json"
             if os.path.isfile(cache_index):
                 try:
@@ -102,19 +115,19 @@ class URL:
                     expired = True
             if expired:
                 del http_cache[cache_key]
-                if http_cache_dir and "blob_id" in cache_entry:
+                if http_cache_blob_dir and "blob_id" in cache_entry:
                     import os
 
                     blob_id = cache_entry["blob_id"]
-                    os.remove(http_cache_dir + "/" + blob_id)
+                    os.remove(http_cache_blob_dir + "/" + blob_id)
             else:
                 if "content" in cache_entry:
                     content = cache_entry["content"]
                     print("CACHED GET", cache_key)
                     return content
-                if http_cache_dir and "blob_id" in cache_entry:
+                if http_cache_blob_dir and "blob_id" in cache_entry:
                     blob_id = cache_entry["blob_id"]
-                    with open(http_cache_dir + "/" + blob_id, "rb") as f:
+                    with open(http_cache_blob_dir + "/" + blob_id, "rb") as f:
                         bytes = f.read()
                         content = bytes.decode("utf8")
                         print("CACHED GET", cache_key)
@@ -261,11 +274,11 @@ class URL:
                     "expires": expires,
                 }
                 http_cache[cache_key] = cache_entry
-                if http_cache_dir:
+                if http_cache_blob_dir:
                     import uuid
 
                     blob_id = str(uuid.uuid4())
-                    blob_path = http_cache_dir + "/" + blob_id
+                    blob_path = http_cache_blob_dir + "/" + blob_id
                     cache_entry["blob_id"] = blob_id
                     with open(blob_path, "wb") as f:
                         f.write(bytes)
@@ -278,10 +291,11 @@ class URL:
 
     def get_cache_key(self) -> str:
         return f"{self.scheme}://{self.host}:{self.port}{self.path}"
-    
-    def get_str(self) -> str:
-        return f"{self.scheme}://{self.host}:{self.port}{self.path}"
 
+    def get_str(self) -> str:
+        if self.scheme == "file":
+            return f"{self.scheme}://{self.path}"
+        return f"{self.scheme}://{self.host}:{self.port}{self.path}"
 
 
 class Text:
@@ -386,7 +400,7 @@ class BrowserState:
 
     def get_scroll(self) -> int:
         return self.data.get("scroll", 0)
-    
+
     def get_history(self) -> dict:
         return self.data.get("history", None)
 
@@ -400,7 +414,7 @@ class BrowserState:
             print("NEW URL?!!!!!")
             self.data["url"] = url
             self.data["scroll"] = 0
-            self.data["history"] = history 
+            self.data["history"] = history
             self.dirty = True
 
     def back(self):
@@ -470,11 +484,12 @@ class GUI:
             self.window.bind("<Prior>", self.pageup)
             self.window.bind("<Next>", self.pagedown)
             self.window.bind("<BackSpace>", self.navigateback)
+            self.window.bind("<F5>", self.locationreload)
             self.window.bind("<Configure>", self.configure)
         window = self.window
         if not self.canvas:
             self.canvas = tkinter.Canvas(window, width=WIDTH, height=HEIGHT, bg="white")
-        
+
         self.restorestate()
 
     def restorestate(self):
@@ -587,6 +602,9 @@ class GUI:
         self.state.back()
         self.restorestate()
 
+    def locationreload(self, e):
+        self.restorestate()
+
     def scrollposupdate(self, amount=100):
         self.scroll += amount
         self.limitscrollinbounds()
@@ -616,7 +634,7 @@ class GUI:
         if not objs:
             return
         elt = objs[-1].node
-        
+
         while elt:
             if isinstance(elt, Text):
                 pass
@@ -924,7 +942,7 @@ class BlockLayout:
                     self.newline()
                 w = font.measure(line)
                 self.append_to_current_line(
-                    self.cursor_x, line, font, self.vert_align, color, node
+                    self.cursor_x, line, font, self.vert_align, node
                 )
                 self.cursor_x += w
                 isnewline = True
@@ -942,23 +960,16 @@ class BlockLayout:
                     continue
                 else:
                     self.newline()
-            self.append_to_current_line(
-                self.cursor_x, txt, font, self.vert_align, color, node
-            )
+            self.append_to_current_line(self.cursor_x, txt, font, self.vert_align, node)
             self.cursor_x += w + space_width
 
-    def append_to_current_line(self, x, txt, font, vert_align, color, node):
+    def append_to_current_line(self, x, txt, font, vert_align, node):
         line = self.children[-1]
         previous = line.children[-1] if line.children else None
-        text = TextLayout(node, txt, line, previous, x, font, vert_align, color)
+        text = TextLayout(node, txt, line, previous, x, font, vert_align)
         line.children.append(text)
-        # old path
-        self.line.append((x, txt, font, vert_align, color))
 
     def newline(self):
-        # old branch
-        # self.flush()
-        # new branch
         self.cursor_x = 0
         last_line = self.children[-1] if self.children else None
         new_line = LineLayout(self.node, self, last_line)
@@ -994,7 +1005,7 @@ class BlockLayout:
                         self.append_to_current_line(
                             self.cursor_x, rangetxt, font, self.vert_align, node
                         )
-                    self.flush()  # continue hypenation on next line
+                    self.newline()  # continue hypenation on next line
             self.cursor_x += space_width
             return True
 
@@ -1074,7 +1085,7 @@ class LineLayout:
 
 
 class TextLayout:
-    def __init__(self, node, word, parent, previous, x, font, vert_align, color):
+    def __init__(self, node, word, parent, previous, x, font, vert_align):
         self.node = node
         self.word = word
         self.children = []
@@ -2086,20 +2097,26 @@ def test_URL():
     assert url.port == 443
     assert url.path == "/style.css"
 
+    url = URL("./www/index.html")
+    url = URL("block.html", parent=url)
+    assert url.scheme == "file"
+    print(url.path)
+    assert url.path == "www/block.html"
+
 
 if __name__ == "__main__":
     import sys
 
     ui = GUI()
     state = BrowserState(None)
-    keyname = None
+    parsearg = None
     for arg in sys.argv[1:]:
-        if keyname:
-            if keyname == "--cache-dir":
+        if parsearg:
+            if parsearg == "--cache-dir":
                 http_cache_dir = arg
                 state = BrowserState(http_cache_dir)
                 state.restore()
-            keyname = None
+            parsearg = None
         elif arg.startswith("-"):
             flag = arg
             if "--gui" == flag:
@@ -2115,7 +2132,7 @@ if __name__ == "__main__":
             elif flag == "--rtl":
                 default_rtl = True
             elif "--cache-dir" == flag:
-                keyname = flag
+                parsearg = flag
             else:
                 raise Exception(f"unknown flag '{flag}'")
         else:
