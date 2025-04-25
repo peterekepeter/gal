@@ -295,7 +295,17 @@ class URL:
     def get_str(self) -> str:
         if self.scheme == "file":
             return f"{self.scheme}://{self.path}"
-        return f"{self.scheme}://{self.host}:{self.port}{self.path}"
+
+        if self.scheme == "https" and self.port == 443:
+            port = ""
+        elif self.scheme == "http" and self.port == 80:
+            port = ""
+        else:
+            port = ":" + self.port
+        return f"{self.scheme}://{self.host}{port}{self.path}"
+
+    def __str__(self):
+        return self.get_str()
 
 
 class Text:
@@ -541,6 +551,7 @@ class GUIBrowser:
     def __init__(self):
         self.window = None
         self.canvas = None
+        self.chrome = None
         self.active_tab = None
         pass
 
@@ -596,7 +607,10 @@ class GUIBrowser:
         w.bind("<Control-7>", lambda e: self.switchtab(6))
         w.bind("<Control-8>", lambda e: self.switchtab(7))
         w.bind("<Control-9>", lambda e: self.switchtab(-1))
+        w.bind("<Key>", self.handlekey)
+        w.bind("<Enter>", self.pressenter)
         self.canvas = tkinter.Canvas(w, width=WIDTH, height=HEIGHT, bg="white")
+        self.chrome = GUIChrome(self)
         self.restorestate()
         tkinter.mainloop()
 
@@ -611,19 +625,41 @@ class GUIBrowser:
     def navigateforward(self, e):
         self.state.forward()
         self.restorestate()
+
     def locationreload(self, e):
         self.restorestate()
 
     def restorestate(self):
         if not self.active_tab:
             self.active_tab = GUIBrowserTab(self)
+            self.resize_active_tab()
         self.active_tab.restorestate()
         self.draw()
 
     def click(self, e):
         x, y = e.x, e.y
-        self.active_tab.click(x, y)
-        self.state.save()
+        if e.y < self.chrome.bottom:
+            self.chrome.click(x, y)
+        else:
+            self.active_tab.click(x, y - self.chrome.bottom)
+        if self.state.dirty:
+            self.state.save()
+            self.restorestate()
+        self.draw()
+
+    def handlekey(self, e):
+        if len(e.char) == 0:
+            return
+        if not (0x20 <= ord(e.char) < 0x7F):
+            return
+        self.chrome.keypress(e.char)
+        self.draw()
+
+    def pressenter(self, e):
+        self.chrome.enter()
+        if self.state.dirty:
+            self.state.save()
+            self.restorestate()
         self.draw()
 
     def configure(self, e):
@@ -631,8 +667,19 @@ class GUIBrowser:
             return
         self.width = e.width
         self.height = e.height
-        self.active_tab.resize(self.width, self.height)
+        self.resize_active_tab()
         self.draw()
+        self.state.set_window_size(self.width, self.height)
+        self.state.save()
+
+    def resize_active_tab(self):
+        tab = self.active_tab
+        width = self.width
+        tab.top = self.chrome.bottom + 2
+        height = self.height - tab.top
+        tab.hstep = self.hstep
+        tab.vstep = self.vstep
+        tab.resize(width, height)
 
     def draw(self):
         import tkinter
@@ -640,6 +687,9 @@ class GUIBrowser:
         # print(tkinter.font.families())
         self.canvas.delete("all")
         self.active_tab.draw(self.canvas)
+
+        for cmd in self.chrome.paint():
+            cmd.execute(0, self.canvas)
 
         self.canvas.pack(fill=tkinter.BOTH, expand=1)
         self.state.save()
@@ -650,17 +700,148 @@ class GUIBrowser:
         self.state.save()
 
 
+class GUIChrome:
+    def __init__(self, browser):
+        self.browser = browser
+        self.font = get_font("", 14, "normal", "roman")
+        self.font_height = self.font.metrics("linespace")
+        # base layout
+        self.width = browser.width
+        self.padding = 5
+        self.tabbar_top = 0
+        self.tabbar_bottom = self.font_height + 2 * self.padding
+        self.bottom = self.tabbar_bottom + self.font_height + self.padding
+        # buttons
+        plus_width = self.font.measure("+") + 2 * self.padding
+        self.newtab_rect = Rect(
+            self.padding,
+            self.padding,
+            self.padding + plus_width,
+            self.padding + self.font_height,
+        )
+        # urlbar
+        self.urlbar_top = self.tabbar_bottom
+        self.urlbar_bottom = self.urlbar_top + self.font_height + 2 * self.padding
+        self.bottom = self.urlbar_bottom
+
+        back_width = self.font.measure("<") + 2 * self.padding
+        self.back_rect = Rect(
+            self.padding,
+            self.urlbar_top + self.padding,
+            self.padding + back_width,
+            self.urlbar_bottom - self.padding,
+        )
+
+        self.address_rect = Rect(
+            self.back_rect.top + self.padding,
+            self.urlbar_top + self.padding,
+            self.width - self.padding,
+            self.urlbar_bottom - self.padding,
+        )
+        self.focus = None
+        self.address_bar = ""
+
+    def click(self, x, y):
+        state = self.browser.state
+        self.focus = None
+        if self.newtab_rect.contains_point(x, y):
+            state.newtab("https://browser.engineering/")
+        elif self.back_rect.contains_point(x, y):
+            state.back()
+        elif self.address_rect.contains_point(x, y):
+            self.focus = "address bar"
+            self.address_bar = ""
+        else:
+            for i in range(state.get_tab_count()):
+                bounds = self.tab_rect(i)
+                if bounds.contains_point(x, y):
+                    state.switchtab(i)
+                    break
+
+    def keypress(self, char):
+        if self.focus == "address bar":
+            self.address_bar += char
+
+    def enter(self):
+        if self.focus == "address bar":
+            state = self.browser.state
+            state.pushlocation(self.address_bar)
+            self.focus = None
+
+    def paint(self):
+        width = self.browser.width
+        state = self.browser.state
+        cmds = []
+        cmds.append(DrawRect(Rect(0, 0, width, self.bottom), "white"))
+        cmds.append(DrawLine(0, self.bottom, width, self.bottom, "black", 1))
+        cmds.append(DrawOutline(self.newtab_rect, "black", 1))
+        cmds.append(DrawText(self.newtab_rect, "+", self.font, "black"))
+        active_tab_index = state.get_active_tab_index()
+        for i in range(state.get_tab_count()):
+            bounds = self.tab_rect(i)
+            cmds.append(
+                DrawLine(bounds.left, 0, bounds.left, bounds.bottom, "black", 1)
+            )
+            cmds.append(
+                DrawLine(bounds.right, 0, bounds.right, bounds.bottom, "black", 1)
+            )
+            cmds.append(DrawText(bounds, "Tab {}".format(i), self.font, "black"))
+
+            if i == active_tab_index:
+                cmds.append(
+                    DrawLine(0, bounds.bottom, bounds.left, bounds.bottom, "black", 1)
+                )
+                cmds.append(
+                    DrawLine(
+                        bounds.right, bounds.bottom, width, bounds.bottom, "black", 1
+                    )
+                )
+        cmds.append(DrawOutline(self.back_rect, "black", 1))
+        cmds.append(DrawText(self.back_rect, "<", self.font, "black"))
+        cmds.append(DrawOutline(self.address_rect, "black", 1))
+
+        if self.focus == "address bar":
+            cmds.append(
+                DrawText(self.address_rect, self.address_bar, self.font, "black")
+            )
+            w = self.font.measure(self.address_bar)
+            cmds.append(
+                DrawLine(
+                    self.address_rect.left + self.padding + w,
+                    self.address_rect.top,
+                    self.address_rect.left + self.padding + w,
+                    self.address_rect.bottom,
+                    "red",
+                    1,
+                )
+            )
+        else:
+            url = state.get_url()
+            cmds.append(DrawText(self.address_rect, url, self.font, "black"))
+
+        return cmds
+
+    def tab_rect(self, i):
+        tabs_start = self.newtab_rect.right + self.padding
+        tab_width = self.font.measure("Tab X") + 2 * self.padding
+        return Rect(
+            tabs_start + tab_width * i,
+            self.tabbar_top,
+            tabs_start + tab_width * (i + 1),
+            self.tabbar_bottom,
+        )
+
+
 class GUIBrowserTab:
     def __init__(self, browser):
         self.window = None
         self.canvas = None
         self.browser = browser
-        self.width = browser.width
-        self.height = browser.height
-        self.hstep = browser.hstep
-        self.vstep = browser.vstep
         self.state: BrowserState = browser.state
         self.scroll = 0
+        self.width = 0
+        self.height = 0
+        self.nodes = None
 
     def browse(self, url):
         self.state.browse(url)
@@ -678,7 +859,6 @@ class GUIBrowserTab:
                 text = f.read()
                 default_style_sheet = CSSParser(text).parse()
 
-        print("navigating to", url)
         self.browser.window.title(url)
         try:
             url = URL(url)
@@ -723,20 +903,21 @@ class GUIBrowserTab:
 
     def draw(self, canvas):
         for cmd in self.display_list:
-            if cmd.top > self.scroll + self.height:
+            if cmd.rect.top > self.scroll + self.height:
                 continue
-            if cmd.bottom < self.scroll:
+            if cmd.rect.bottom < self.scroll:
                 continue
-            cmd.execute(self.scroll, canvas)
+            cmd.execute(self.scroll - self.top, canvas)
 
+        # scrollbar
         if self.scroll_bottom > self.height:
             pos_0 = self.scroll / self.scroll_bottom
             pos_1 = (self.scroll + self.height) / self.scroll_bottom
             canvas.create_rectangle(
                 self.width - 8,
-                self.height * pos_0,
+                self.top + self.height * pos_0,
                 self.width,
-                self.height * pos_1,
+                self.top + self.height * pos_1,
                 fill="#000",
             )
 
@@ -775,7 +956,6 @@ class GUIBrowserTab:
                 parent = URL(self.state.get_url())
                 url = URL(elt.attributes["href"], parent=parent).get_str()
                 state.pushlocation(url)
-                self.restorestate()
             elt = elt.parent
 
     def resize(self, width, height):
@@ -783,10 +963,9 @@ class GUIBrowserTab:
             return
         self.width = width
         self.height = height
-        self.layout()
-        self.limitscrollinbounds()
-        self.state.set_window_size(self.width, self.height)
-        self.state.save()
+        if self.nodes:
+            self.layout()
+            self.limitscrollinbounds()
 
     def layout(self):
         self.document = DocumentLayout(self.nodes)
@@ -853,6 +1032,9 @@ class BlockLayout:
         self.hstep = h
         self.vstep = v
 
+    def self_rect(self):
+        return Rect(self.x, self.y, self.x + self.width, self.y + self.height)
+
     def paint(self):
         cmds = []
 
@@ -860,19 +1042,15 @@ class BlockLayout:
             bgcolor = self.node.style.get("background-color", "transparent")
 
             if bgcolor != "transparent":
-                x2, y2 = self.x + self.width, self.y + self.height
-                rect = DrawRect(self.x, self.y, x2, y2, bgcolor)
+                rect = DrawRect(self.self_rect(), bgcolor)
                 cmds.append(rect)
 
             if self.node.tag == "li":
                 x = self.x - 8
                 y = self.y + 14
-                rect = DrawRect(x - 2, y - 2, x + 2, y + 2, "#000")
-                cmds.append(rect)
-
-        # TODO remove old branch
-        # for x, y, word, font, color in self.display_list:
-        #     cmds.append(DrawText(x, y, word, font, color))
+                rect = Rect(x - 2, y - 2, x + 2, y + 2)
+                cmd = DrawRect(rect, "#000")
+                cmds.append(cmd)
 
         return cmds
 
@@ -1286,7 +1464,8 @@ class TextLayout:
         self.height = self.font.metrics("linespace")
 
     def paint(self):
-        return [DrawText(self.x, self.y, self.word, self.font, self.color)]
+        rect = Rect(self.x, self.y, self.x + self.width, self.y + self.height)
+        return [DrawText(rect, self.word, self.font, self.color)]
 
     def __repr__(self):
         return f"Text {repr(self.word)} {self.x},{self.y} {self.width},{self.height}"
@@ -1312,18 +1491,16 @@ def get_font(family, size, weight, style):
 
 
 class DrawText:
-    def __init__(self, x1, y1, text, font, color):
-        self.top = y1
-        self.left = x1
+    def __init__(self, rect, text, font, color):
+        self.rect = rect
         self.text = text
         self.font = font
         self.color = color
-        self.bottom = y1 + font.metrics("linespace")
 
     def execute(self, scroll, canvas):
         canvas.create_text(
-            self.left,
-            self.top - scroll,
+            self.rect.left,
+            self.rect.top - scroll,
             text=self.text,
             font=self.font,
             anchor="nw",
@@ -1332,22 +1509,64 @@ class DrawText:
 
 
 class DrawRect:
-    def __init__(self, x1, y1, x2, y2, color):
-        self.top = y1
-        self.left = x1
-        self.bottom = y2
-        self.right = x2
+    def __init__(self, rect, color):
+        self.rect = rect
         self.color = color
 
     def execute(self, scroll, canvas):
         canvas.create_rectangle(
-            self.left,
-            self.top - scroll,
-            self.right,
-            self.bottom - scroll,
+            self.rect.left,
+            self.rect.top - scroll,
+            self.rect.right,
+            self.rect.bottom - scroll,
             width=0,
             fill=self.color,
         )
+
+
+class DrawOutline:
+    def __init__(self, rect, color, thickness):
+        self.rect = rect
+        self.color = color
+        self.thickness = thickness
+
+    def execute(self, scroll, canvas):
+        canvas.create_rectangle(
+            self.rect.left,
+            self.rect.top - scroll,
+            self.rect.right,
+            self.rect.bottom - scroll,
+            width=self.thickness,
+            outline=self.color,
+        )
+
+
+class DrawLine:
+    def __init__(self, x1, y1, x2, y2, color, thickness):
+        self.rect = Rect(x1, y1, x2, y2)
+        self.color = color
+        self.thickness = thickness
+
+    def execute(self, scroll, canvas):
+        canvas.create_line(
+            self.rect.left,
+            self.rect.top - scroll,
+            self.rect.right,
+            self.rect.bottom - scroll,
+            fill=self.color,
+            width=self.thickness,
+        )
+
+
+class Rect:
+    def __init__(self, left, top, right, bottom):
+        self.left = left
+        self.top = top
+        self.right = right
+        self.bottom = bottom
+
+    def contains_point(self, x, y):
+        return x >= self.left and x < self.right and y >= self.top and y < self.bottom
 
 
 class HTMLParser:
@@ -2322,7 +2541,6 @@ def test_BrowserState():
     state.pushlocation("https://another.com")
     state.forward()
     assert state.get_url() == "https://another.com"
-
 
 
 if __name__ == "__main__":
