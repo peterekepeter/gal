@@ -424,6 +424,15 @@ class BrowserState:
         self.data["tabs"] = tabs
         self.dirty = True
 
+    def closetab(self, index):
+        tabs = [v for (k, v) in enumerate(self.data.get("tabs", [])) if k != index]
+        active = self.data.get("active_tab_index")
+        active = active - 1 if index < active else active
+        if tabs != self.data.get("tabs", []):
+            self.data["tabs"] = tabs
+            self.data["active_tab_index"] = active
+            self.dirty = True
+
     def pushlocation(self, url):
         item = self._get_current_item()
         to_return_to = self._create_return_item()
@@ -573,7 +582,9 @@ class GUIBrowser:
         w.bind("<Up>", lambda e: self.scrollposupdate(-100))
         w.bind("<Down>", lambda e: self.scrollposupdate(+100))
         w.bind("<MouseWheel>", lambda e: self.scrollposupdate(-e.delta))
-        w.bind("<Button-1>", self.click)
+        w.bind("<Button-1>", lambda e: self.click(e, 1))
+        w.bind("<Button-2>", lambda e: self.click(e, 2))
+        w.bind("<Button-3>", lambda e: self.click(e, 3))
         w.bind("<Button-4>", lambda e: self.scrollposupdate(-100))
         w.bind("<Button-5>", lambda e: self.scrollposupdate(+100))
         w.bind("<Prior>", lambda e: self.scrollposupdate(-self.height + 96))
@@ -664,12 +675,12 @@ class GUIBrowser:
         self.active_tab.restorestate()
         self.draw()
 
-    def click(self, e):
+    def click(self, e, button):
         x, y = e.x, e.y
         if e.y < self.chrome.bottom:
-            self.chrome.click(x, y)
+            self.chrome.click(x, y, button)
         else:
-            self.active_tab.click(x, y - self.chrome.bottom)
+            self.active_tab.click(x, y - self.chrome.bottom, button)
         if self.state.dirty:
             self.state.save()
             self.restorestate()
@@ -754,7 +765,7 @@ class GUIChrome:
         self.focus = None
         self.address_bar = ""
 
-    def click(self, x, y):
+    def click(self, x, y, button):
         state = self.browser.state
         self.focus = None
         if self.newtab_rect.contains_point(x, y):
@@ -768,7 +779,10 @@ class GUIChrome:
             for i in range(state.get_tab_count()):
                 bounds = self.tab_rect(i)
                 if bounds.contains_point(x, y):
-                    state.switchtab(i)
+                    if button == 1 or button == 3:
+                        state.switchtab(i)
+                    elif button == 2:
+                        state.closetab(i)
                     break
 
     def input(self, char):
@@ -873,6 +887,9 @@ class GUIBrowserTab:
     def load(self, url):
         global default_style_sheet
 
+        if url == "" or url.isspace():
+            url = "about:blank"
+
         if default_style_sheet is None:
             with open("browser.css") as f:
                 text = f.read()
@@ -952,7 +969,7 @@ class GUIBrowserTab:
         if self.scroll < 0:
             self.scroll = 0
 
-    def click(self, x, y):
+    def click(self, x, y, button):
         y += self.scroll
 
         objs = [
@@ -961,9 +978,6 @@ class GUIBrowserTab:
             if obj.x <= x < obj.x + obj.width and obj.y <= y < obj.y + obj.height
         ]
 
-        # print hit
-        # for obj in objs:
-        #     print(obj)
         if not objs:
             return
         elt = objs[-1].node
@@ -974,7 +988,12 @@ class GUIBrowserTab:
             elif elt.tag == "a" and "href" in elt.attributes:
                 parent = URL(self.state.get_url())
                 url = URL(elt.attributes["href"], parent=parent).get_str()
-                state.pushlocation(url)
+                if button == 1:
+                    state.pushlocation(url)
+                elif button == 2:
+                    state.newtab(url)
+                else:
+                    pass
             elt = elt.parent
 
     def resize(self, width, height):
@@ -2560,6 +2579,14 @@ def test_BrowserState():
     state.pushlocation("https://another.com")
     state.forward()
     assert state.get_url() == "https://another.com"
+
+    # closetab
+    state.switchtab(1)
+    assert state.get_active_tab_index() == 1
+    assert state.get_tab_count() == 3
+    state.closetab(0)
+    assert state.get_active_tab_index() == 0
+    assert state.get_tab_count() == 2
 
 
 if __name__ == "__main__":
