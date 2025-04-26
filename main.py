@@ -582,7 +582,7 @@ class GUIBrowser:
         w.bind("<End>", lambda e: self.scrollposupdate(+1000_000_000))
         w.bind("<Alt-Left>", self.navigateback)
         w.bind("<Alt-Right>", self.navigateforward)
-        w.bind("<BackSpace>", self.navigateback)
+        w.bind("<BackSpace>", self.pressbackspace)
         w.bind("<Shift-BackSpace>", self.navigateforward)
         w.bind("<F5>", self.locationreload)
         w.bind("<Configure>", self.configure)
@@ -607,6 +607,7 @@ class GUIBrowser:
         w.bind("<Control-7>", lambda e: self.switchtab(6))
         w.bind("<Control-8>", lambda e: self.switchtab(7))
         w.bind("<Control-9>", lambda e: self.switchtab(-1))
+        w.bind("<Control-v>", self.handlepaste)
         w.bind("<Key>", self.handlekey)
         w.bind("<Enter>", self.pressenter)
         self.canvas = tkinter.Canvas(w, width=WIDTH, height=HEIGHT, bg="white")
@@ -616,6 +617,33 @@ class GUIBrowser:
 
     def scrollposupdate(self, amount=100):
         self.active_tab.scrollposupdate(amount)
+        self.draw()
+
+    def pressbackspace(self, e):
+        if self.chrome.pressbackspace():
+            self.draw()
+        else:
+            self.state.back()
+            self.restorestate()
+
+    def handlepaste(self, e):
+        content = self.window.clipboard_get()
+        self.chrome.input(content)
+        self.draw()
+
+    def handlekey(self, e):
+        if len(e.char) == 0:
+            return
+        if not (0x20 <= ord(e.char) < 0x7F):
+            return
+        self.chrome.input(e.char)
+        self.draw()
+
+    def pressenter(self, e):
+        self.chrome.enter()
+        if self.state.dirty:
+            self.state.save()
+            self.restorestate()
         self.draw()
 
     def navigateback(self, e):
@@ -642,21 +670,6 @@ class GUIBrowser:
             self.chrome.click(x, y)
         else:
             self.active_tab.click(x, y - self.chrome.bottom)
-        if self.state.dirty:
-            self.state.save()
-            self.restorestate()
-        self.draw()
-
-    def handlekey(self, e):
-        if len(e.char) == 0:
-            return
-        if not (0x20 <= ord(e.char) < 0x7F):
-            return
-        self.chrome.keypress(e.char)
-        self.draw()
-
-    def pressenter(self, e):
-        self.chrome.enter()
         if self.state.dirty:
             self.state.save()
             self.restorestate()
@@ -758,7 +771,7 @@ class GUIChrome:
                     state.switchtab(i)
                     break
 
-    def keypress(self, char):
+    def input(self, char):
         if self.focus == "address bar":
             self.address_bar += char
 
@@ -767,6 +780,12 @@ class GUIChrome:
             state = self.browser.state
             state.pushlocation(self.address_bar)
             self.focus = None
+
+    def pressbackspace(self):
+        if self.focus == "address bar":
+            self.address_bar = self.address_bar[:-1]
+            return True
+        return False
 
     def paint(self):
         width = self.browser.width
