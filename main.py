@@ -31,7 +31,9 @@ class URL:
             self.path = url
             return
         if "://" not in url:
-            if parent and not url.startswith("/"):
+            if parent and url.startswith('#'):
+                self.fragment = url
+            elif parent and not url.startswith("/"):
                 self.path = "/".join(self.path.split("/")[:-1] + [url])
                 if self.path.startswith("./"):
                     self.path = self.path[2:]
@@ -42,6 +44,10 @@ class URL:
                     if "/" not in url:
                         url = "/" + url
                 self.path = url
+            if "#" in self.path:
+                print(self.path, "!!!")
+                self.path, self.fragment = self.path.split('#', 1)
+                self.fragment = '#' + self.fragment
             return
         self.scheme, url = url.split("://", 1)
         supported = ["http", "https", "file"]
@@ -50,6 +56,9 @@ class URL:
             self.host = ""
             self.path = url
         else:
+            if "#" in url:
+                url, self.fragment = url.split("#", 1)
+                self.fragment = "#" + self.fragment
             if "/" not in url:
                 url = url + "/"
             self.host, url = url.split("/", 1)
@@ -62,6 +71,7 @@ class URL:
             self.port = 80
         elif self.scheme == "https":
             self.port = 443
+
 
     def request(self, max_redirect=3):
         if self.scheme == "about":
@@ -302,7 +312,8 @@ class URL:
             port = ""
         else:
             port = ":" + self.port
-        return f"{self.scheme}://{self.host}{port}{self.path}"
+        fragment = self.fragment if hasattr(self, 'fragment') else ''
+        return f"{self.scheme}://{self.host}{port}{self.path}{fragment}"
 
     def __str__(self):
         return self.get_str()
@@ -430,7 +441,7 @@ class BrowserState:
 
     def get_scroll(self) -> int:
         item = self._get_current_item()
-        return item.get("scroll", 0)
+        return item.get("scroll")
 
     def get_history(self) -> dict:
         item = self._get_current_item()
@@ -505,7 +516,7 @@ class BrowserState:
         item = self._get_current_item()
         if item.get("scroll") != pos:
             item["scroll"] = pos
-            if pos == 0:
+            if pos is None:
                 item.pop("scroll")
             self.dirty = True
 
@@ -967,23 +978,23 @@ class GUIBrowserTab:
         self.start(self.state)
 
     def restorestate(self):
-        self.scroll = self.state.get_scroll()
+        self.scroll = self.state.get_scroll() or 0
         self.load(self.state.get_url())
 
-    def load(self, url):
+    def load(self, urlstr):
         global default_style_sheet
 
-        if url == "" or url.isspace():
-            url = "about:blank"
+        if urlstr == "" or urlstr.isspace():
+            urlstr = "about:blank"
 
         if default_style_sheet is None:
             with open("browser.css") as f:
                 text = f.read()
                 default_style_sheet = CSSParser(text).parse()
 
-        self.title(url)
+        self.title(urlstr)
         try:
-            url = URL(url)
+            url = URL(urlstr)
         except Exception as err:
             import traceback
 
@@ -1024,6 +1035,16 @@ class GUIBrowserTab:
 
         self.layout()
         # print_tree(self.document)
+
+        if hasattr(url, 'fragment') and len(url.fragment)>1:
+            target_id = url.fragment[1:]
+            layoutlist = tree_to_list(self.document, [])
+            for item in layoutlist:
+                if isinstance(item.node, Element):
+                    if item.node.attributes.get("id") == target_id:
+                        self.scroll = item.y
+                        self.limitscrollinbounds()
+                        break
 
     def draw(self, canvas):
         for cmd in self.display_list:
@@ -2604,6 +2625,13 @@ def test_URL():
     assert url.scheme == "file"
     print(url.path)
     assert url.path == "www/block.html"
+
+    url = URL("https://example.com/page.html#main")
+    assert url.path == "/page.html"
+    assert url.fragment == "#main"
+    url = URL("#other", url)
+    assert url.path == "/page.html"
+    assert url.fragment == "#other"
 
 
 def test_BrowserState():
