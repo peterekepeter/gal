@@ -445,7 +445,7 @@ class BrowserState:
 
     def closetab(self, index):
         tabs = [v for (k, v) in enumerate(self.data.get("tabs", [])) if k != index]
-        active = self.data.get("active_tab_index")
+        active = self.data.get("active_tab_index", 0)
         active = active - 1 if index <= active else active
         if tabs != self.data.get("tabs", []):
             self.data["tabs"] = tabs
@@ -471,6 +471,9 @@ class BrowserState:
                 item.pop("scroll")
             self.dirty = True
 
+    def can_back(self):
+        return self._get_current_item().get("history")
+
     def back(self):
         item = self._get_current_item()
         history = item.get("history")
@@ -482,6 +485,9 @@ class BrowserState:
             to_restore = history.pop()
             self._copy_item_locaiton_state(src=to_restore, dst=item)
             self.dirty = True
+
+    def can_forward(self):
+        return self._get_current_item().get("future")
 
     def forward(self):
         item = self._get_current_item()
@@ -638,6 +644,7 @@ class GUIBrowser:
         w.bind("<Control-8>", lambda e: self.switchtab(7))
         w.bind("<Control-9>", lambda e: self.switchtab(-1))
         w.bind("<Control-v>", self.handlepaste)
+        w.bind("<Control-t>", self.newtab)
         w.bind("<Key>", self.handlekey)
         w.bind("<Return>", self.pressenter)
         self.canvas = tkinter.Canvas(w, width=WIDTH, height=HEIGHT, bg="white")
@@ -742,6 +749,11 @@ class GUIBrowser:
         self.restorestate()
         self.state.save()
 
+    def newtab(self, e):
+        self.state.newtab("about:blank")
+        self.restorestate()
+        self.state.save()
+
     def title(self, str):
         self.window.title(f"{str} \u2014 Gal")
 
@@ -779,11 +791,24 @@ class GUIChrome:
             self.urlbar_bottom - self.padding,
         )
 
+        self.forward_rect = Rect(
+            self.back_rect.right + self.padding,
+            self.urlbar_top + self.padding,
+            self.back_rect.right + self.padding + back_width,
+            self.urlbar_bottom - self.padding,
+        )
+
         self.address_rect = Rect(
-            self.back_rect.top + self.padding,
+            self.forward_rect.right + self.padding,
             self.urlbar_top + self.padding,
             self.width - self.padding,
             self.urlbar_bottom - self.padding,
+        )
+        self.address_txt_rect = Rect(
+            self.address_rect.left + self.padding,
+            self.address_rect.top,
+            self.address_rect.right,
+            self.address_rect.bottom,
         )
         self.focus = None
         self.address_bar = ""
@@ -795,6 +820,8 @@ class GUIChrome:
             state.newtab("https://browser.engineering/")
         elif self.back_rect.contains_point(x, y):
             state.back()
+        elif self.forward_rect.contains_point(x, y):
+            state.forward()
         elif self.address_rect.contains_point(x, y):
             self.focus = "address bar"
             self.address_bar = ""
@@ -830,10 +857,11 @@ class GUIChrome:
         width = self.browser.width
         state = self.browser.state
         cmds = []
+
         cmds.append(DrawRect(Rect(0, 0, width, self.bottom), "white"))
         cmds.append(DrawLine(0, self.bottom, width, self.bottom, "black", 1))
-        cmds.append(DrawOutline(self.newtab_rect, "black", 1))
-        cmds.append(DrawText(self.newtab_rect, "+", self.font, "black"))
+        self._paint_button(cmds, self.newtab_rect, "+")
+
         active_tab_index = state.get_active_tab_index()
         for i in range(state.get_tab_count()):
             bounds = self.tab_rect(i)
@@ -843,7 +871,7 @@ class GUIChrome:
             cmds.append(
                 DrawLine(bounds.right, 0, bounds.right, bounds.bottom, "black", 1)
             )
-            
+
             if i == active_tab_index:
                 cmds.append(
                     DrawLine(0, bounds.bottom, bounds.left, bounds.bottom, "black", 1)
@@ -853,10 +881,10 @@ class GUIChrome:
                         bounds.right, bounds.bottom, width, bounds.bottom, "black", 1
                     )
                 )
-                
+
             str = state.get_title_by_index(i)
             substr = ""
-            for i in range(len(str)+1):
+            for i in range(len(str) + 1):
                 checkstr = str[0:i]
                 if len(checkstr) < len(str):
                     checkstr += "..."
@@ -864,17 +892,26 @@ class GUIChrome:
                     substr = checkstr
                 else:
                     break
-            textbound = Rect(bounds.left + self.padding, bounds.top + self.padding, bounds.right - self.padding, bounds.bottom - self.padding)
+            textbound = Rect(
+                bounds.left + self.padding,
+                bounds.top + self.padding,
+                bounds.right - self.padding,
+                bounds.bottom - self.padding,
+            )
             cmds.append(DrawText(textbound, substr, self.font, "black"))
             # cmds.append(DrawText(bounds, "Tab {}".format(i), self.font, "black"))
 
-        cmds.append(DrawOutline(self.back_rect, "black", 1))
-        cmds.append(DrawText(self.back_rect, "<", self.font, "black"))
-        cmds.append(DrawOutline(self.address_rect, "black", 1))
+        # address bar buttons
+        back_color = "black" if state.can_back() else "gray"
+        forward_color = "black" if state.can_forward() else "gray"
+        self._paint_button(cmds, self.back_rect, "<", color=back_color)
+        self._paint_button(cmds, self.forward_rect, ">", color=forward_color)
 
+        # address bar input
+        cmds.append(DrawOutline(self.address_rect, "black", 1))
         if self.focus == "address bar":
             cmds.append(
-                DrawText(self.address_rect, self.address_bar, self.font, "black")
+                DrawText(self.address_txt_rect, self.address_bar, self.font, "black")
             )
             w = self.font.measure(self.address_bar)
             cmds.append(
@@ -889,7 +926,7 @@ class GUIChrome:
             )
         else:
             url = state.get_url()
-            cmds.append(DrawText(self.address_rect, url, self.font, "black"))
+            cmds.append(DrawText(self.address_txt_rect, url, self.font, "black"))
 
         return cmds
 
@@ -902,6 +939,16 @@ class GUIChrome:
             tabs_start + tab_width * (i + 1),
             self.tabbar_bottom,
         )
+
+    def _layout_button_text(self, outline_rect, txt, vpad=0):
+        size = self.font.measure(txt)
+        x = (outline_rect.left + outline_rect.right - size) // 2
+        return Rect(x, outline_rect.top + vpad, x + size, outline_rect.bottom - vpad)
+
+    def _paint_button(self, cmds, outline_rect, txt, vpad=0, color="black"):
+        r = self._layout_button_text(outline_rect, txt, vpad)
+        cmds.append(DrawOutline(outline_rect, color, 1))
+        cmds.append(DrawText(r, txt, self.font, color))
 
 
 class GUIBrowserTab:
