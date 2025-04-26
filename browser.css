@@ -7,6 +7,7 @@ code { font-family: Courier; }
 pre { font-family: Courier; white-space: pre; }
 
 html { display: block; }
+head { display: none; }
 body { display: block; }
 article { display: block; }
 section { display: block; }
@@ -46,3 +47,4 @@ summary { display: block; }
 
 style { display: none; }
 script { display: none; }
+title { display: none; }

@@ -405,6 +405,25 @@ class BrowserState:
             self.file.save()
             self.dirty = False
 
+    def set_title(self, str):
+        if self.get_title() != str:
+            item = self._get_current_item()
+            item["title"] = str
+            if not str:
+                item.pop("title")
+            self.dirty = True
+
+    def get_title(self):
+        index = self.get_active_tab_index()
+        return self.get_title_by_index(index)
+
+    def get_title_by_index(self, index):
+        item = self.data["tabs"][index]
+        result = item.get("title")
+        if not result:
+            result = f"Tab {self.get_active_tab_index() + 1}"
+        return result
+
     def get_url(self) -> str:
         item = self._get_current_item()
         return item.get("url", "")
@@ -427,7 +446,7 @@ class BrowserState:
     def closetab(self, index):
         tabs = [v for (k, v) in enumerate(self.data.get("tabs", [])) if k != index]
         active = self.data.get("active_tab_index")
-        active = active - 1 if index < active else active
+        active = active - 1 if index <= active else active
         if tabs != self.data.get("tabs", []):
             self.data["tabs"] = tabs
             self.data["active_tab_index"] = active
@@ -620,7 +639,7 @@ class GUIBrowser:
         w.bind("<Control-9>", lambda e: self.switchtab(-1))
         w.bind("<Control-v>", self.handlepaste)
         w.bind("<Key>", self.handlekey)
-        w.bind("<Enter>", self.pressenter)
+        w.bind("<Return>", self.pressenter)
         self.canvas = tkinter.Canvas(w, width=WIDTH, height=HEIGHT, bg="white")
         self.chrome = GUIChrome(self)
         self.restorestate()
@@ -723,15 +742,19 @@ class GUIBrowser:
         self.restorestate()
         self.state.save()
 
+    def title(self, str):
+        self.window.title(f"{str} \u2014 Gal")
+
 
 class GUIChrome:
     def __init__(self, browser):
         self.browser = browser
-        self.font = get_font("", 14, "normal", "roman")
+        self.font = get_font("", 12, "normal", "roman")
         self.font_height = self.font.metrics("linespace")
         # base layout
         self.width = browser.width
         self.padding = 5
+        self.tabwidth = 150
         self.tabbar_top = 0
         self.tabbar_bottom = self.font_height + 2 * self.padding
         self.bottom = self.tabbar_bottom + self.font_height + self.padding
@@ -790,9 +813,11 @@ class GUIChrome:
             self.address_bar += char
 
     def enter(self):
+        print("enterpressed")
         if self.focus == "address bar":
             state = self.browser.state
             state.pushlocation(self.address_bar)
+            print("pushlocation")
             self.focus = None
 
     def pressbackspace(self):
@@ -818,8 +843,7 @@ class GUIChrome:
             cmds.append(
                 DrawLine(bounds.right, 0, bounds.right, bounds.bottom, "black", 1)
             )
-            cmds.append(DrawText(bounds, "Tab {}".format(i), self.font, "black"))
-
+            
             if i == active_tab_index:
                 cmds.append(
                     DrawLine(0, bounds.bottom, bounds.left, bounds.bottom, "black", 1)
@@ -829,6 +853,21 @@ class GUIChrome:
                         bounds.right, bounds.bottom, width, bounds.bottom, "black", 1
                     )
                 )
+                
+            str = state.get_title_by_index(i)
+            substr = ""
+            for i in range(len(str)+1):
+                checkstr = str[0:i]
+                if len(checkstr) < len(str):
+                    checkstr += "..."
+                if self.font.measure(checkstr) < self.tabwidth:
+                    substr = checkstr
+                else:
+                    break
+            textbound = Rect(bounds.left + self.padding, bounds.top + self.padding, bounds.right - self.padding, bounds.bottom - self.padding)
+            cmds.append(DrawText(textbound, substr, self.font, "black"))
+            # cmds.append(DrawText(bounds, "Tab {}".format(i), self.font, "black"))
+
         cmds.append(DrawOutline(self.back_rect, "black", 1))
         cmds.append(DrawText(self.back_rect, "<", self.font, "black"))
         cmds.append(DrawOutline(self.address_rect, "black", 1))
@@ -856,7 +895,7 @@ class GUIChrome:
 
     def tab_rect(self, i):
         tabs_start = self.newtab_rect.right + self.padding
-        tab_width = self.font.measure("Tab X") + 2 * self.padding
+        tab_width = self.tabwidth + 2 * self.padding
         return Rect(
             tabs_start + tab_width * i,
             self.tabbar_top,
@@ -895,7 +934,7 @@ class GUIBrowserTab:
                 text = f.read()
                 default_style_sheet = CSSParser(text).parse()
 
-        self.browser.window.title(url)
+        self.title(url)
         try:
             url = URL(url)
         except Exception as err:
@@ -930,6 +969,8 @@ class GUIBrowserTab:
                         rules.extend(CSSParser(body).parse())
                 elif node.tag == "style":
                     rules.extend(CSSParser(node.get_text()).parse())
+                elif node.tag == "title":
+                    self.title(node.get_text())
 
         style(self.nodes, sorted(rules, key=cascade_priority))
         # print_tree(self.nodes)
@@ -1013,6 +1054,10 @@ class GUIBrowserTab:
         self.display_list = []
         paint_tree(self.document, self.display_list)
         self.scroll_bottom = self.document.height
+
+    def title(self, str):
+        state.set_title(str)
+        self.browser.title(str)
 
 
 class DocumentLayout:
@@ -2550,11 +2595,15 @@ def test_BrowserState():
     # check scroll is local to tab
     state.switchtab(0)
     state.set_scroll(100)
+    state.set_title("a")
     state.switchtab(1)
     state.set_scroll(200)
+    state.set_title("b")
+    assert state.get_title() == "b"
     assert state.get_scroll() == 200
     state.switchtab(0)
     assert state.get_scroll() == 100
+    assert state.get_title() == "a"
 
     # check pushlocation & back & forward
     state.switchtab(0)
@@ -2587,6 +2636,10 @@ def test_BrowserState():
     state.closetab(0)
     assert state.get_active_tab_index() == 0
     assert state.get_tab_count() == 2
+    state.switchtab(1)
+    state.closetab(1)
+    assert state.get_url() == "https://another.com"
+    assert state.get_tab_count() == 1
 
 
 if __name__ == "__main__":
