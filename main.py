@@ -186,7 +186,7 @@ class URL:
 
         statusline = response.readline().decode("utf8")
         version, status, explanation = statusline.split(" ", 2)
-        print(status, explanation.strip(), "GET", self.host, self.path)
+        print(status, explanation.strip(), "GET", cache_key)
         response_headers = {}
         while True:
             line = response.readline().decode("utf8")
@@ -362,6 +362,18 @@ class Element:
     def body(self):
         return self.get_child("body")
 
+    @property
+    def isvisited(self):
+        if hasattr(self, "_visited"):
+            return self._visited is True
+        return False
+
+    @property
+    def href(self):
+        if hasattr(self, "_href"):
+            return self._href
+        return None
+
     def get_child(self, tag):
         for node in self.children:
             if node.tag == tag:
@@ -373,6 +385,25 @@ def tree_to_list(tree, list):
     for child in tree.children:
         tree_to_list(child, list)
     return list
+
+
+def eval_visited(node, baseurl, visited_set):
+    href = eval_href(node, baseurl)
+    if not href:
+        return False
+    visited = href in visited_set
+    node._visited = visited
+    return visited
+
+
+def eval_href(node, baseurl):
+    href = None
+    if isinstance(node, Element):
+        hrefstr = node.attributes.get("href")
+        if hrefstr:
+            href = URL(hrefstr, parent=baseurl).get_str()
+        node._href = href
+    return href
 
 
 def print_tree(node, indent=0):
@@ -591,6 +622,53 @@ class BrowserState:
             dst.pop("url")
 
 
+class BrowserHistory:
+    def __init__(self, profile_dir):
+        self.file = (
+            JsonFileState(profile_dir + "/__history.json") if profile_dir else None
+        )
+        self.data = {"history": []}
+        self._urlindex = {}
+        self.dirty = False
+        self.needreindex = False
+
+    def restore(self):
+        if self.file:
+            if self.file.load():
+                self.data = self.file.data
+                self.dirty = False
+                self.needreindex = True
+
+    def save(self):
+        if self.file and self.dirty:
+            self.file.data = self.data
+            self.file.save()
+            self.dirty = False
+
+    def visited(self, urlstr):
+        import time
+
+        self.data["history"].append({"url": urlstr, "time": time.time()})
+        self.needreindex = True
+        self.dirty = True
+
+    def is_visited(self, urlstr) -> bool:
+        if self.needreindex:
+            self.reindex()
+        return urlstr in self._urlindex
+
+    def reindex(self):
+        self._urlindex = {}
+        for item in self.data["history"]:
+            url = item.get("url", "")
+            self._urlindex[url] = item
+
+    def get_visited_set(self):
+        if self.needreindex:
+            self.reindex()
+        return self._urlindex
+
+
 class CLI:
     def browse(self, urlstr, max_redirect=5):
         print("navigating to", urlstr)
@@ -610,8 +688,9 @@ class GUIBrowser:
         self.active_tab = None
         pass
 
-    def start(self, state):
+    def start(self, state, history):
         self.state = state
+        self.history = history
 
         import tkinter
 
@@ -723,6 +802,9 @@ class GUIBrowser:
             self.resize_active_tab()
         self.active_tab.restorestate(readcache)
         self.draw()
+        url = self.state.get_url()
+        self.history.visited(url)
+        self.history.save()
 
     def click(self, e, button):
         x, y = e.x, e.y
@@ -852,7 +934,7 @@ class GUIChrome:
         state = self.browser.state
         self.focus = None
         if self.newtab_rect.contains_point(x, y):
-            state.newtab("https://browser.engineering/")
+            state.newtab("about:empty")
         elif self.back_rect.contains_point(x, y):
             state.back()
         elif self.forward_rect.contains_point(x, y):
@@ -1041,6 +1123,7 @@ class GUIBrowserTab:
         nodelist = tree_to_list(self.nodes, [])
         for node in nodelist:
             if isinstance(node, Element):
+                eval_visited(node, url, self.browser.history.get_visited_set())
                 if node.tag == "link":
                     if (
                         node.attributes.get("rel") == "stylesheet"
@@ -2108,6 +2191,9 @@ class CSSParser:
                     self.whitespace()
                     musthave = self.makeSelector(tag)
                     out = HasSelector(out, musthave)
+                if word == "visited":
+                    self.whitespace()
+                    out = VisitedSelector(out)
                 else:
                     continue  # misparse
             else:
@@ -2402,6 +2488,22 @@ class HasSelector:
         return f"Has({self.base}, {self.musthave})"
 
 
+class VisitedSelector:
+    def __init__(self, base):
+        self.base = base
+        self.priority = base.priority + 1
+
+    def matches(self, node):
+        if not self.base.matches(node):
+            return False
+        if not isinstance(node, Element):
+            return False
+        return node.isvisited
+
+    def __repr__(self):
+        return f"Visited({self.base})"
+
+
 class OrSelector:
     def __init__(self, list=[]):
         self.list = list
@@ -2434,11 +2536,13 @@ def test():
 
 
 def test_CSS_selectors():
-    def matchcount(selector, html):
+    def matchcount(selector, html, visited={}):
         nodes = HTMLParser(html).parse()
         css = CSSParser(selector + "{ color: red }").parse()
         count = 0
+        baseurl = ""
         for node in tree_to_list(nodes, []):
+            eval_visited(node, baseurl, visited)
             for rule in css:
                 if rule[0].matches(node):
                     count += 1
@@ -2456,6 +2560,11 @@ def test_CSS_selectors():
     assert matchcount("a:has(span)", "<a>x</a>") == 0
     assert matchcount("a:has(span)", "<a><span>x</span></a>") == 1
     assert matchcount("strong,b", "<b></b><strong></strong>") == 2
+    assert matchcount("a:visited", "<a>x</a>") == 0
+    assert matchcount("a:visited", '<a href="file:///test">x</a>') == 0
+    assert (
+        matchcount("a:visited", '<a href="file:///t">x</a>', visited=["file:///t"]) == 1
+    )
 
 
 def test_CSS_parse():
@@ -2754,6 +2863,7 @@ if __name__ == "__main__":
 
     ui = GUIBrowser()
     state = BrowserState(None)
+    history = BrowserHistory(None)
     parsearg = None
     for arg in sys.argv[1:]:
         if parsearg:
@@ -2761,6 +2871,8 @@ if __name__ == "__main__":
                 http_cache_dir = arg
                 state = BrowserState(http_cache_dir)
                 state.restore()
+                history = BrowserHistory(http_cache_dir)
+                history.restore()
             parsearg = None
         elif arg.startswith("-"):
             flag = arg
@@ -2784,4 +2896,4 @@ if __name__ == "__main__":
             url = arg
             state.newtab(url)
 
-    ui.start(state)
+    ui.start(state, history)

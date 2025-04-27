@@ -1,4 +1,5 @@
 a { color: royalblue; }
+a:visited { color: blueviolet }
 i { font-style: italic; }
 b, strong { font-weight: bold; }
 small { font-size: 90%; }
