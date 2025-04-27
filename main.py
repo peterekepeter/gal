@@ -5,10 +5,13 @@ http_cache_dir = None
 http_cache_blob_dir = None
 default_rtl = False
 default_style_sheet = None
+default_search_engine = "https://lite.duckduckgo.com/lite?q="
 
 
 class URL:
     def __init__(self, url, parent=None):
+        self.fragment = ""
+        self.search = ""
         if parent:
             self.scheme = parent.scheme
             self.path = parent.path
@@ -27,11 +30,13 @@ class URL:
             self.scheme, url = url.split(":", 1)
             self.mimetype, self.content = url.split(",", 1)
             return
+        if url.startswith("//"):
+            self.host, url = url[2:].split("/", 1)
         if url.startswith("/") and parent:
             self.path = url
             return
         if "://" not in url:
-            if parent and url.startswith('#'):
+            if parent and url.startswith("#"):
                 self.fragment = url
             elif parent and not url.startswith("/"):
                 self.path = "/".join(self.path.split("/")[:-1] + [url])
@@ -45,9 +50,8 @@ class URL:
                         url = "/" + url
                 self.path = url
             if "#" in self.path:
-                print(self.path, "!!!")
-                self.path, self.fragment = self.path.split('#', 1)
-                self.fragment = '#' + self.fragment
+                self.path, self.fragment = self.path.split("#", 1)
+                self.fragment = "#" + self.fragment
             return
         self.scheme, url = url.split("://", 1)
         supported = ["http", "https", "file"]
@@ -59,6 +63,9 @@ class URL:
             if "#" in url:
                 url, self.fragment = url.split("#", 1)
                 self.fragment = "#" + self.fragment
+            if "?" in url:
+                url, self.search = url.split("?", 1)
+                self.search = "?" + self.search
             if "/" not in url:
                 url = url + "/"
             self.host, url = url.split("/", 1)
@@ -72,8 +79,7 @@ class URL:
         elif self.scheme == "https":
             self.port = 443
 
-
-    def request(self, max_redirect=3):
+    def request(self, max_redirect=3, readcache=True):
         if self.scheme == "about":
             if self.path == "blank":
                 return ""
@@ -84,13 +90,13 @@ class URL:
         elif self.scheme == "file":
             return self.request_file()
         else:
-            return self.request_socket(max_redirect)
+            return self.request_socket(max_redirect, readcache)
 
     def request_file(self):
         with open(self.path) as f:
             return f.read()
 
-    def request_socket(self, max_redirect=3):
+    def request_socket(self, max_redirect=3, readcache=True):
         global sock_pool
         global http_cache
         global http_cache_blob_dir
@@ -114,7 +120,7 @@ class URL:
                     http_cache = {}
 
         cache_key = self.get_cache_key()
-        if cache_key in http_cache:
+        if cache_key in http_cache and readcache:
             cache_entry = http_cache[cache_key]
             expires = cache_entry["expires"]
             expired = False
@@ -166,7 +172,7 @@ class URL:
 
         method = "GET"
         reqlines = [
-            f"{method} {self.path} HTTP/1.1\r\n",
+            f"{method} {self.path}{self.search} HTTP/1.1\r\n",
             f"Host: {self.host}\r\n",
             "Connection: keep-alive\r\n",
             "Accept-Encoding: gzip\r\n",
@@ -300,7 +306,7 @@ class URL:
         return content
 
     def get_cache_key(self) -> str:
-        return f"{self.scheme}://{self.host}:{self.port}{self.path}"
+        return f"{self.scheme}://{self.host}:{self.port}{self.path}{self.search}"
 
     def get_str(self) -> str:
         if self.scheme == "file":
@@ -312,8 +318,9 @@ class URL:
             port = ""
         else:
             port = ":" + self.port
-        fragment = self.fragment if hasattr(self, 'fragment') else ''
-        return f"{self.scheme}://{self.host}{port}{self.path}{fragment}"
+        return (
+            f"{self.scheme}://{self.host}{port}{self.path}{self.search}{self.fragment}"
+        )
 
     def __str__(self):
         return self.get_str()
@@ -454,7 +461,10 @@ class BrowserState:
         self.data["tabs"] = tabs
         self.dirty = True
 
-    def closetab(self, index):
+    def closetab(self):
+        self.closetabindex(self.get_active_tab_index())
+
+    def closetabindex(self, index):
         tabs = [v for (k, v) in enumerate(self.data.get("tabs", [])) if k != index]
         active = self.data.get("active_tab_index", 0)
         active = active - 1 if index <= active else active
@@ -656,6 +666,8 @@ class GUIBrowser:
         w.bind("<Control-9>", lambda e: self.switchtab(-1))
         w.bind("<Control-v>", self.handlepaste)
         w.bind("<Control-t>", self.newtab)
+        w.bind("<Control-F4>", self.closetab)
+        w.bind("<Control-u>", self.viewsource)
         w.bind("<Key>", self.handlekey)
         w.bind("<Return>", self.pressenter)
         self.canvas = tkinter.Canvas(w, width=WIDTH, height=HEIGHT, bg="white")
@@ -703,13 +715,13 @@ class GUIBrowser:
         self.restorestate()
 
     def locationreload(self, e):
-        self.restorestate()
+        self.restorestate(readcache=False)
 
-    def restorestate(self):
+    def restorestate(self, readcache=True):
         if not self.active_tab:
             self.active_tab = GUIBrowserTab(self)
             self.resize_active_tab()
-        self.active_tab.restorestate()
+        self.active_tab.restorestate(readcache)
         self.draw()
 
     def click(self, e, button):
@@ -762,8 +774,20 @@ class GUIBrowser:
 
     def newtab(self, e):
         self.state.newtab("about:blank")
+        self.chrome.focusaddressbar()
         self.restorestate()
         self.state.save()
+
+    def closetab(self, e):
+        self.state.closetab()
+        self.restorestate()
+
+    def viewsource(self, e):
+        url = self.state.get_url()
+        if not url.startswith("view-source:"):
+            self.state.newtab("view-source:" + url)
+            self.restorestate()
+            self.state.save()
 
     def title(self, str):
         self.window.title(f"{str} \u2014 Gal")
@@ -834,8 +858,7 @@ class GUIChrome:
         elif self.forward_rect.contains_point(x, y):
             state.forward()
         elif self.address_rect.contains_point(x, y):
-            self.focus = "address bar"
-            self.address_bar = ""
+            self.focusaddressbar()
         else:
             for i in range(state.get_tab_count()):
                 bounds = self.tab_rect(i)
@@ -843,19 +866,24 @@ class GUIChrome:
                     if button == 1 or button == 3:
                         state.switchtab(i)
                     elif button == 2:
-                        state.closetab(i)
+                        state.closetabindex(i)
                     break
+
+    def focusaddressbar(self):
+        self.focus = "address bar"
+        self.address_bar = ""
 
     def input(self, char):
         if self.focus == "address bar":
             self.address_bar += char
 
     def enter(self):
-        print("enterpressed")
         if self.focus == "address bar":
             state = self.browser.state
-            state.pushlocation(self.address_bar)
-            print("pushlocation")
+            location = self.address_bar
+            if "/" not in location:
+                location = default_search_engine + location
+            state.pushlocation(location)
             self.focus = None
 
     def pressbackspace(self):
@@ -977,11 +1005,11 @@ class GUIBrowserTab:
         self.state.browse(url)
         self.start(self.state)
 
-    def restorestate(self):
+    def restorestate(self, readcache):
         self.scroll = self.state.get_scroll() or 0
-        self.load(self.state.get_url())
+        self.load(self.state.get_url(), readcache)
 
-    def load(self, urlstr):
+    def load(self, urlstr, readcache):
         global default_style_sheet
 
         if urlstr == "" or urlstr.isspace():
@@ -1002,7 +1030,7 @@ class GUIBrowserTab:
             print(traceback.format_exc())
             url = URL("about:blank")
 
-        result = url.request(max_redirect=5)
+        result = url.request(max_redirect=5, readcache=readcache)
 
         parser_class = HTMLParser if not url.viewsource else HTMLSourceParser
 
@@ -1036,7 +1064,7 @@ class GUIBrowserTab:
         self.layout()
         # print_tree(self.document)
 
-        if hasattr(url, 'fragment') and len(url.fragment)>1:
+        if hasattr(url, "fragment") and len(url.fragment) > 1:
             target_id = url.fragment[1:]
             layoutlist = tree_to_list(self.document, [])
             for item in layoutlist:
@@ -2623,7 +2651,6 @@ def test_URL():
     url = URL("./www/index.html")
     url = URL("block.html", parent=url)
     assert url.scheme == "file"
-    print(url.path)
     assert url.path == "www/block.html"
 
     url = URL("https://example.com/page.html#main")
@@ -2632,6 +2659,11 @@ def test_URL():
     url = URL("#other", url)
     assert url.path == "/page.html"
     assert url.fragment == "#other"
+
+    url = URL("https://duckduckgo.com/?q=test&ia=web")
+    assert url.search == "?q=test&ia=web"
+    url = URL("//duckduckgo.com/dist/some.css", parent=url)
+    assert url.path == "/dist/some.css"
 
 
 def test_BrowserState():
@@ -2708,11 +2740,11 @@ def test_BrowserState():
     state.switchtab(1)
     assert state.get_active_tab_index() == 1
     assert state.get_tab_count() == 3
-    state.closetab(0)
+    state.closetabindex(0)
     assert state.get_active_tab_index() == 0
     assert state.get_tab_count() == 2
     state.switchtab(1)
-    state.closetab(1)
+    state.closetabindex(1)
     assert state.get_url() == "https://another.com"
     assert state.get_tab_count() == 1
 
