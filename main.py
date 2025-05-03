@@ -455,6 +455,7 @@ class BrowserState:
             self.dirty = False
 
     def set_title(self, str):
+        str = str.strip()
         if self.get_title() != str:
             item = self._get_current_item()
             item["title"] = str
@@ -467,11 +468,14 @@ class BrowserState:
         return self.get_title_by_index(index)
 
     def get_title_by_index(self, index):
+        tab = self.data.get("tabs", [])
+        if not tab:
+            return ""
         item = self.data["tabs"][index]
         result = item.get("title")
         if not result:
             result = f"Tab {self.get_active_tab_index() + 1}"
-        return result
+        return result.strip()
 
     def get_url(self) -> str:
         item = self._get_current_item()
@@ -570,7 +574,7 @@ class BrowserState:
         return self.data.get("width", 800), self.data.get("height", 600)
 
     def get_tab_count(self):
-        return len(self.data["tabs"])
+        return len(self.data.get("tabs", []))
 
     def get_active_tab_index(self):
         return self.data.get("active_tab_index", 0)
