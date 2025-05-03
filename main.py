@@ -673,6 +673,57 @@ class BrowserHistory:
         return self._urlindex
 
 
+class BrowserBookmarks:
+    def __init__(self, profile_dir):
+        self.file = (
+            JsonFileState(profile_dir + "/__bookmarks.json") if profile_dir else None
+        )
+        self.data = {"bookmarks": {}}
+        self.dirty = False
+
+    def restore(self):
+        if self.file:
+            if self.file.load():
+                self.data = self.file.data
+                self.dirty = False
+
+    def save(self):
+        if self.file and self.dirty:
+            self.file.data = self.data
+            self.file.save()
+            self.dirty = False
+
+
+    def get_count(self) -> int:
+        return len(self.data["bookmarks"])
+
+    def toggle(self, url: str, title: str):
+        item = self._get_item(url)
+        if not item:
+            item = self._create_new_item(url, title)
+            self.data["bookmarks"][url] = item
+        else:
+            self._remove_item(url)
+        self.dirty = True
+
+    def contains(self, url: str):
+        return url in self.data["bookmarks"]
+
+    def get_urls(self):
+        return list(self.data["bookmarks"].keys())
+
+    def _get_item(self, url: str):
+        return self.data["bookmarks"].get(url)
+
+    def _create_new_item(self, url: str, title:str):
+        return {"url": url, "title": title}
+
+    def _remove_item(self, url: str):
+        if self.contains(url):
+            self.data["bookmarks"].pop(url)
+            self.dirty = True
+
+
 class CLI:
     def browse(self, urlstr, max_redirect=5):
         print("navigating to", urlstr)
@@ -692,9 +743,10 @@ class GUIBrowser:
         self.active_tab = None
         pass
 
-    def start(self, state, history):
-        self.state = state
-        self.history = history
+    def start(self, state, history, bookmarks):
+        self.state: BrowserState = state
+        self.history: BrowserHistory = history
+        self.bookmarks: BrowserBookmarks = bookmarks
 
         import tkinter
 
@@ -878,9 +930,15 @@ class GUIBrowser:
     def title(self, str):
         self.window.title(f"{str} \u2014 Gal")
 
+    def toggle_bookmark(self):
+        url = self.state.get_url()
+        title = self.state.get_title()
+        self.bookmarks.toggle(url, title)
+        self.bookmarks.save()
+
 
 class GUIChrome:
-    def __init__(self, browser):
+    def __init__(self, browser: GUIBrowser):
         self.browser = browser
         self.font = get_font("", 12, "normal", "roman")
         self.font_height = self.font.metrics("linespace")
@@ -919,8 +977,22 @@ class GUIChrome:
             self.urlbar_bottom - self.padding,
         )
 
-        self.address_rect = Rect(
+        self.reload_rect = Rect(
             self.forward_rect.right + self.padding,
+            self.urlbar_top + self.padding,
+            self.forward_rect.right + self.padding + back_width,
+            self.urlbar_bottom - self.padding,
+        )
+
+        self.bookmark_rect = Rect(
+            self.reload_rect.right + self.padding,
+            self.urlbar_top + self.padding,
+            self.reload_rect.right + self.padding + back_width,
+            self.urlbar_bottom - self.padding,
+        )
+
+        self.address_rect = Rect(
+            self.bookmark_rect.right + self.padding,
             self.urlbar_top + self.padding,
             self.width - self.padding,
             self.urlbar_bottom - self.padding,
@@ -935,7 +1007,7 @@ class GUIChrome:
         self.address_bar = ""
 
     def click(self, x, y, button):
-        state = self.browser.state
+        state: BrowserState = self.browser.state
         self.focus = None
         if self.newtab_rect.contains_point(x, y):
             state.newtab("about:empty")
@@ -943,6 +1015,10 @@ class GUIChrome:
             state.back()
         elif self.forward_rect.contains_point(x, y):
             state.forward()
+        elif self.reload_rect.contains_point(x, y):
+            self.browser.restorestate(readcache=False)
+        elif self.bookmark_rect.contains_point(x, y):
+            self.browser.toggle_bookmark()
         elif self.address_rect.contains_point(x, y):
             self.focusaddressbar()
         else:
@@ -1031,6 +1107,9 @@ class GUIChrome:
         forward_color = "black" if state.can_forward() else "gray"
         self._paint_button(cmds, self.back_rect, "<", color=back_color)
         self._paint_button(cmds, self.forward_rect, ">", color=forward_color)
+        self._paint_button(cmds, self.reload_rect, "\u21ba", color=forward_color)
+        bookmark_icon = "\u2605" if self.browser.bookmarks.contains(self.browser.state.get_url()) else "\u2606"
+        self._paint_button(cmds, self.bookmark_rect, bookmark_icon, color=forward_color)
 
         # address bar input
         cmds.append(DrawOutline(self.address_rect, "black", 1))
@@ -2537,6 +2616,7 @@ def test():
     test_HTML_parse_and_get_text()
     test_CSS_selectors()
     test_BrowserState()
+    test_BrowserBookmarks()
 
 
 def test_CSS_selectors():
@@ -2825,6 +2905,10 @@ def test_BrowserState():
     assert state.get_scroll() == 100
     assert state.get_title() == "a"
 
+    # title is stripped of whitespace
+    state.set_title(" a ")
+    assert state.get_title() == "a"
+
     # check pushlocation & back & forward
     state.switchtab(0)
     state.pushlocation("https://example.com")
@@ -2862,12 +2946,24 @@ def test_BrowserState():
     assert state.get_tab_count() == 1
 
 
+def test_BrowserBookmarks():
+    bm = BrowserBookmarks(None)
+    assert bm.get_count() == 0
+    bm.toggle("https://example.com", "Example")
+    assert bm.get_count() == 1
+    assert bm.contains("https://example.com")
+    assert bm.get_urls() == ["https://example.com"]
+    bm.toggle("https://example.com", "Example")
+    assert bm.get_count() == 0
+
+
 if __name__ == "__main__":
     import sys
 
     ui = GUIBrowser()
     state = BrowserState(None)
     history = BrowserHistory(None)
+    bookmarks = BrowserBookmarks(None)
     parsearg = None
     for arg in sys.argv[1:]:
         if parsearg:
@@ -2877,6 +2973,8 @@ if __name__ == "__main__":
                 state.restore()
                 history = BrowserHistory(http_cache_dir)
                 history.restore()
+                bookmarks = BrowserBookmarks(http_cache_dir)
+                bookmarks.restore()
             parsearg = None
         elif arg.startswith("-"):
             flag = arg
@@ -2900,4 +2998,4 @@ if __name__ == "__main__":
             url = arg
             state.newtab(url)
 
-    ui.start(state, history)
+    ui.start(state, history, bookmarks)
