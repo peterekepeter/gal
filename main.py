@@ -311,7 +311,8 @@ class URL:
     def get_str(self) -> str:
         if self.scheme == "file":
             return f"{self.scheme}://{self.path}"
-
+        if self.scheme == "about":
+            return f"{self.scheme}:{self.path}"
         if self.scheme == "https" and self.port == 443:
             port = ""
         elif self.scheme == "http" and self.port == 80:
@@ -602,7 +603,10 @@ class BrowserState:
 
     def _get_current_item(self):
         if "tabs" in self.data:
+            tabs = self.data["tabs"]
             idx = self.get_active_tab_index()
+            if idx >= len(tabs) or idx < 0:
+                return {}
             return self.data["tabs"][idx]
         else:
             return self.data
@@ -693,9 +697,12 @@ class BrowserBookmarks:
             self.file.save()
             self.dirty = False
 
-
     def get_count(self) -> int:
         return len(self.data["bookmarks"])
+    
+    def get_title(self, url: str) -> str:
+        item = self._get_item(url)
+        return item.get("title", "") if item else url
 
     def toggle(self, url: str, title: str):
         item = self._get_item(url)
@@ -715,13 +722,21 @@ class BrowserBookmarks:
     def _get_item(self, url: str):
         return self.data["bookmarks"].get(url)
 
-    def _create_new_item(self, url: str, title:str):
+    def _create_new_item(self, url: str, title: str):
         return {"url": url, "title": title}
 
     def _remove_item(self, url: str):
         if self.contains(url):
             self.data["bookmarks"].pop(url)
             self.dirty = True
+
+
+def generate_bookmarks_page(bookmarks: BrowserBookmarks) -> str:
+    result = ["<title>Bookmarks</title><style>small { color:green }</style>"]
+    for url in bookmarks.get_urls():
+        title = bookmarks.get_title(url)
+        result.append(f'<li><a href="{url}"><h2>{title}</h2><small>{url}</small></a></li>')
+    return f"<ul>{''.join(result)}</ul>"
 
 
 class CLI:
@@ -803,6 +818,8 @@ class GUIBrowser:
         w.bind("<Control-t>", self.newtab)
         w.bind("<Control-F4>", self.closetab)
         w.bind("<Control-u>", self.viewsource)
+        w.bind("<Control-b>", self.newbookmarkstab)
+        w.bind("<Control-d>", lambda e: self.toggle_bookmark())
         w.bind("<Key>", self.handlekey)
         w.bind("<Return>", self.pressenter)
         self.canvas = tkinter.Canvas(w, width=WIDTH, height=HEIGHT, bg="white")
@@ -916,6 +933,12 @@ class GUIBrowser:
         self.restorestate()
         self.state.save()
 
+    def newbookmarkstab(self, e):
+        self.state.newtab("about:bookmarks")
+        self.chrome.focusaddressbar()
+        self.restorestate()
+        self.state.save()
+
     def closetab(self, e):
         self.state.closetab()
         self.restorestate()
@@ -935,6 +958,7 @@ class GUIBrowser:
         title = self.state.get_title()
         self.bookmarks.toggle(url, title)
         self.bookmarks.save()
+        self.draw()
 
 
 class GUIChrome:
@@ -951,10 +975,18 @@ class GUIChrome:
         self.bottom = self.tabbar_bottom + self.font_height + self.padding
         # buttons
         plus_width = self.font.measure("+") + 2 * self.padding
-        self.newtab_rect = Rect(
+        self.button_width = plus_width
+        self.bookmarks_rect = Rect(
             self.padding,
             self.padding,
             self.padding + plus_width,
+            self.padding + self.font_height,
+        )
+        # urlbar
+        self.newtab_rect = Rect(
+            self.bookmarks_rect.right + self.padding,
+            self.padding,
+            self.bookmarks_rect.right + self.padding + plus_width,
             self.padding + self.font_height,
         )
         # urlbar
@@ -1011,6 +1043,8 @@ class GUIChrome:
         self.focus = None
         if self.newtab_rect.contains_point(x, y):
             state.newtab("about:empty")
+        if self.bookmarks_rect.contains_point(x,y):
+            self.browser.newbookmarkstab(None)
         elif self.back_rect.contains_point(x, y):
             state.back()
         elif self.forward_rect.contains_point(x, y):
@@ -1025,7 +1059,9 @@ class GUIChrome:
             for i in range(state.get_tab_count()):
                 bounds = self.tab_rect(i)
                 if bounds.contains_point(x, y):
-                    if button == 1 or button == 3:
+                    if x > bounds.right - self.padding - self.button_width:
+                        state.closetabindex(i)
+                    elif button == 1 or button == 3:
                         state.switchtab(i)
                     elif button == 2:
                         state.closetabindex(i)
@@ -1043,7 +1079,7 @@ class GUIChrome:
         if self.focus == "address bar":
             state = self.browser.state
             location = self.address_bar
-            if "/" not in location:
+            if "/" not in location and ":" not in location:
                 location = default_search_engine + location
             state.pushlocation(location)
             self.focus = None
@@ -1061,6 +1097,7 @@ class GUIChrome:
 
         cmds.append(DrawRect(Rect(0, 0, width, self.bottom), "white"))
         cmds.append(DrawLine(0, self.bottom, width, self.bottom, "black", 1))
+        self._paint_button(cmds, self.bookmarks_rect, "☰")
         self._paint_button(cmds, self.newtab_rect, "+")
 
         active_tab_index = state.get_active_tab_index()
@@ -1072,7 +1109,13 @@ class GUIChrome:
             cmds.append(
                 DrawLine(bounds.right, 0, bounds.right, bounds.bottom, "black", 1)
             )
-
+            textwidth = self.tabwidth
+            textbound = Rect(
+                bounds.left + self.padding,
+                bounds.top + self.padding,
+                bounds.right - self.padding,
+                bounds.bottom - self.padding,
+            )
             if i == active_tab_index:
                 cmds.append(
                     DrawLine(0, bounds.bottom, bounds.left, bounds.bottom, "black", 1)
@@ -1082,6 +1125,14 @@ class GUIChrome:
                         bounds.right, bounds.bottom, width, bounds.bottom, "black", 1
                     )
                 )
+                textwidth = self.tabwidth - self.button_width
+                closebound = Rect(
+                    bounds.right - self.padding - self.button_width,
+                    bounds.top + self.padding,
+                    bounds.right - self.padding,
+                    bounds.bottom - self.padding,
+                )
+                self._paint_button(cmds, closebound, "x")
 
             str = state.get_title_by_index(i)
             substr = ""
@@ -1089,27 +1140,24 @@ class GUIChrome:
                 checkstr = str[0:i]
                 if len(checkstr) < len(str):
                     checkstr += "..."
-                if self.font.measure(checkstr) < self.tabwidth:
+                if self.font.measure(checkstr) < textwidth:
                     substr = checkstr
                 else:
                     break
-            textbound = Rect(
-                bounds.left + self.padding,
-                bounds.top + self.padding,
-                bounds.right - self.padding,
-                bounds.bottom - self.padding,
-            )
             cmds.append(DrawText(textbound, substr, self.font, "black"))
-            # cmds.append(DrawText(bounds, "Tab {}".format(i), self.font, "black"))
 
         # address bar buttons
         back_color = "black" if state.can_back() else "gray"
         forward_color = "black" if state.can_forward() else "gray"
         self._paint_button(cmds, self.back_rect, "<", color=back_color)
         self._paint_button(cmds, self.forward_rect, ">", color=forward_color)
-        self._paint_button(cmds, self.reload_rect, "\u21ba", color=forward_color)
-        bookmark_icon = "\u2605" if self.browser.bookmarks.contains(self.browser.state.get_url()) else "\u2606"
-        self._paint_button(cmds, self.bookmark_rect, bookmark_icon, color=forward_color)
+        self._paint_button(cmds, self.reload_rect, "\u21ba")
+        bookmark_icon = (
+            "\u2605"
+            if self.browser.bookmarks.contains(self.browser.state.get_url())
+            else "\u2606"
+        )
+        self._paint_button(cmds, self.bookmark_rect, bookmark_icon)
 
         # address bar input
         cmds.append(DrawOutline(self.address_rect, "black", 1))
@@ -1195,7 +1243,15 @@ class GUIBrowserTab:
             print(traceback.format_exc())
             url = URL("about:blank")
 
-        result = url.request(max_redirect=5, readcache=readcache)
+        if url.scheme == "about":  # handle meta pages
+            if url.path == "blank":
+                result = ""
+            elif url.path == "bookmarks":
+                result = generate_bookmarks_page(self.browser.bookmarks)
+            else:
+                result = "page not found"
+        else:  # external data source
+            result = url.request(max_redirect=5, readcache=readcache)
 
         parser_class = HTMLParser if not url.viewsource else HTMLSourceParser
 
@@ -2858,6 +2914,11 @@ def test_URL():
     url = URL("//duckduckgo.com/dist/some.css", parent=url)
     assert url.path == "/dist/some.css"
 
+    url = URL("about:blank")
+    assert url.scheme == "about"
+    assert url.path == "blank"
+    assert url.get_str() == "about:blank"
+
 
 def test_BrowserState():
     # 3 tabs to work with
@@ -2953,6 +3014,7 @@ def test_BrowserBookmarks():
     assert bm.get_count() == 1
     assert bm.contains("https://example.com")
     assert bm.get_urls() == ["https://example.com"]
+    assert bm.get_title("https://example.com") == "Example"
     bm.toggle("https://example.com", "Example")
     assert bm.get_count() == 0
 
