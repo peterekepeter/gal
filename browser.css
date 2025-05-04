@@ -49,3 +49,16 @@ summary { display: block; }
 style { display: none; }
 script { display: none; }
 title { display: none; }
+
+input {
+    color: black;
+    background: white;
+    border: 1px solid black;
+    padding: 2px
+}
+button {
+    background: lightgray;
+    border: 1px solid black;
+    text-align: center;
+    padding: 2px
+}

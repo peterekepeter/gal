@@ -79,7 +79,7 @@ class URL:
         elif self.scheme == "https":
             self.port = 443
 
-    def request(self, max_redirect=3, readcache=True):
+    def request(self, max_redirect=3, readcache=True, payload=None):
         if self.scheme == "about":
             if self.path == "blank":
                 return ""
@@ -88,18 +88,22 @@ class URL:
         if self.scheme == "data":
             return self.content
         elif self.scheme == "file":
+            if payload:
+                raise Exception("cannot POST payload to file")
             return self.request_file()
         else:
-            return self.request_socket(max_redirect, readcache)
+            return self.request_socket(max_redirect, readcache, payload)
 
     def request_file(self):
         with open(self.path) as f:
             return f.read()
 
-    def request_socket(self, max_redirect=3, readcache=True):
+    def request_socket(self, max_redirect=3, readcache=True, payload=None):
         global sock_pool
         global http_cache
         global http_cache_blob_dir
+
+        method = "GET" if not payload else "POST"
 
         if http_cache_dir:
             import os
@@ -119,8 +123,8 @@ class URL:
                     print("Warning: Failed to load cache index", err)
                     http_cache = {}
 
-        cache_key = self.get_cache_key()
-        if cache_key in http_cache and readcache:
+        cache_key = self.get_cache_key() if method == "GET" else None
+        if cache_key and cache_key in http_cache and readcache:
             cache_entry = http_cache[cache_key]
             expires = cache_entry["expires"]
             expired = False
@@ -170,14 +174,19 @@ class URL:
                 s = ctx.wrap_socket(s, server_hostname=self.host)
             f = s.makefile("rb", encoding="utf8", newline="\r\n")
 
-        method = "GET"
+        method = "POST" if payload else "GET"
         reqlines = [
             f"{method} {self.path}{self.search} HTTP/1.1\r\n",
             f"Host: {self.host}\r\n",
             "Connection: keep-alive\r\n",
             "Accept-Encoding: gzip\r\n",
-            "\r\n",
         ]
+        if payload:
+            length = len(payload.encode("utf8"))
+            reqlines.append("Content-Length: {}\r\n".format(length))
+        reqlines.append("\r\n") # end of headers
+        if payload:
+            reqlines.append(payload)
         request = "".join(reqlines)
         bytestosend = request.encode("utf8")
         bytessent = s.send(bytestosend)
@@ -186,7 +195,7 @@ class URL:
 
         statusline = response.readline().decode("utf8")
         version, status, explanation = statusline.split(" ", 2)
-        print(status, explanation.strip(), "GET", cache_key)
+        print(status, explanation.strip(), method, self.get_str())
         response_headers = {}
         while True:
             line = response.readline().decode("utf8")
@@ -285,7 +294,7 @@ class URL:
 
             print("store", store)
 
-            if store:
+            if store and cache_key:
                 cache_entry = {
                     "expires": expires,
                 }
@@ -318,7 +327,7 @@ class URL:
         elif self.scheme == "http" and self.port == 80:
             port = ""
         else:
-            port = ":" + self.port
+            port = f":{self.port}"
         return (
             f"{self.scheme}://{self.host}{port}{self.path}{self.search}{self.fragment}"
         )
@@ -348,6 +357,7 @@ class Element:
         self.children = []
         self.parent = parent
         self.style = {}
+        self.is_focused = False
 
     def get_text(self):
         return "".join([c.get_text() for c in self.children])
@@ -861,11 +871,17 @@ class GUIBrowser:
             return
         if not (0x20 <= ord(e.char) < 0x7F):
             return
-        self.chrome.input(e.char)
+        if self.chrome.input(e.char):
+            pass
+        elif self.focus == "content":
+            self.active_tab.input(e.char)
         self.draw()
 
     def pressenter(self, e):
-        self.chrome.enter()
+        if self.chrome.enter():
+            pass
+        elif self.focus == "content":
+            self.active_tab.pressenter()
         if self.state.dirty:
             self.state.save()
             self.restorestate()
@@ -900,9 +916,13 @@ class GUIBrowser:
     def click(self, e, button):
         x, y = e.x, e.y
         if e.y < self.chrome.bottom:
+            self.focus = None
             self.chrome.click(x, y, button)
         else:
+            self.focus = "content"
+            self.chrome.blur()
             self.active_tab.click(x, y - self.chrome.bottom, button)
+
         if self.state.dirty:
             self.state.save()
             self.restorestate()
@@ -1107,6 +1127,9 @@ class GUIChrome:
                         state.closetabindex(i)
                     break
 
+    def blur(self):
+        self.focus = None
+
     def focusaddressbar(self):
         self.focus = "address bar"
         self.address_bar = ""
@@ -1235,7 +1258,9 @@ class GUIChrome:
         cmds.append(DrawOutline(self.address_rect, "black", 1))
         if self.focus == "address bar":
             cmds.append(
-                DrawText(self.address_txt_rect, self.address_bar, self.font, "black", None)
+                DrawText(
+                    self.address_txt_rect, self.address_bar, self.font, "black", None
+                )
             )
             text_before_cursor = self.address_bar[: self.address_bar_cursor]
             w = self.font.measure(text_before_cursor)
@@ -1286,6 +1311,8 @@ class GUIBrowserTab:
         self.width = 0
         self.height = 0
         self.nodes = None
+        self.focus = None
+        self.loaded = ""
 
     def browse(self, url):
         self.state.browse(url)
@@ -1293,11 +1320,14 @@ class GUIBrowserTab:
 
     def restorestate(self, readcache):
         self.scroll = self.state.get_scroll() or 0
-        self.load(self.state.get_url(), readcache)
+        url = self.state.get_url()
+        if url != self.loaded:
+            self.load(self.state.get_url(), readcache)
 
-    def load(self, urlstr, readcache):
+    def load(self, urlstr, readcache, payload=None):
         global default_style_sheet
 
+        self.loaded = ""
         if urlstr == "" or urlstr.isspace():
             urlstr = "about:blank"
 
@@ -1324,7 +1354,7 @@ class GUIBrowserTab:
             else:
                 result = "page not found"
         else:  # external data source
-            result = url.request(max_redirect=5, readcache=readcache)
+            result = url.request(max_redirect=5, readcache=readcache, payload=payload)
 
         parser_class = HTMLParser if not url.viewsource else HTMLSourceParser
 
@@ -1353,10 +1383,12 @@ class GUIBrowserTab:
                 elif node.tag == "title":
                     self.title(node.get_text())
 
-        style(self.nodes, sorted(rules, key=cascade_priority))
+        self.rules = rules
+
+        # style(self.nodes, sorted(rules, key=cascade_priority))
         # print_tree(self.nodes)
 
-        self.layout()
+        self.render()
         # print_tree(self.document)
 
         if hasattr(url, "fragment") and len(url.fragment) > 1:
@@ -1368,6 +1400,18 @@ class GUIBrowserTab:
                         self.scroll = item.y
                         self.limitscrollinbounds()
                         break
+        
+        self.loaded = url.get_str()
+
+    def render(self):
+        style(self.nodes, sorted(self.rules, key=cascade_priority))
+        self.document = DocumentLayout(self.nodes)
+        self.document.set_size(self.width, self.height)
+        self.document.set_step(self.hstep, self.vstep)
+        self.document.layout()
+        self.display_list = []
+        self.scroll_bottom = self.document.height
+        paint_tree(self.document, self.display_list)
 
     def draw(self, canvas):
         for cmd in self.display_list:
@@ -1404,19 +1448,43 @@ class GUIBrowserTab:
     def click(self, x, y, button):
         y += self.scroll
 
+        if self.focus:
+            self.focus.is_focused = False
+            self.focus = None
+        need_render = False
+        form_submit = False
+        form = None
         travelurl = ""
         for item in reversed(self.display_list):
-            if not item.rect.contains_point(x,y):
+            if not item.rect.contains_point(x, y):
                 continue
             if not hasattr(item, "node"):
                 continue
             node = item.node
             while node:
-                print(node)
-                if isinstance(node, Element) and node.tag == "a" and "href" in node.attributes:
-                    parent = URL(self.state.get_url())
-                    travelurl = URL(node.attributes["href"], parent=parent).get_str()
+                if isinstance(node, Element):
+                    if node.tag == "a" and "href" in node.attributes:
+                        travelurl = self.resolve_url(node.attributes["href"])
+                        self.focus = node
+                    elif node.tag == "input":
+                        node.attributes["value"] = ""
+                        need_render = True
+                        self.focus = node
+                    elif node.tag == "button":
+                        form_submit = True
+                        self.focus = node
+                    elif node.tag == "form" and "action" in node.attributes:
+                        form = node
                 node = node.parent
+
+        if self.focus:
+            self.focus.is_focused = True
+
+        if need_render:
+            self.render()
+
+        if form_submit and form:
+            self.submit_form(form)
 
         if travelurl:
             if button == 1:
@@ -1426,27 +1494,65 @@ class GUIBrowserTab:
             else:
                 pass
 
+    def input(self, txt):
+        if self.focus:
+            self.focus.attributes["value"] += txt
+            self.render()
+
+    def pressenter(self):
+        if self.focus:
+            self.submit_form(self.focus)
+
     def resize(self, width, height):
         if self.width == width and self.height == height:
             return
         self.width = width
         self.height = height
         if self.nodes:
-            self.layout()
+            self.render()
             self.limitscrollinbounds()
-
-    def layout(self):
-        self.document = DocumentLayout(self.nodes)
-        self.document.set_size(self.width, self.height)
-        self.document.set_step(self.hstep, self.vstep)
-        self.document.layout()
-        self.display_list = []
-        paint_tree(self.document, self.display_list)
-        self.scroll_bottom = self.document.height
 
     def title(self, str):
         state.set_title(str)
         self.browser.title(str)
+
+    def submit_form(self, form):
+        while form and form.tag != "form":
+            form = form.parent
+        
+        if not form:
+            return
+
+        inputs = [
+            node
+            for node in tree_to_list(form, [])
+            if isinstance(node, Element)
+            and node.tag == "input"
+            and "name" in node.attributes
+        ]
+        method = form.attributes.get("method", "post").strip().casefold()
+        body = ""
+        for input in inputs:
+            import urllib.parse
+
+            name = input.attributes["name"]
+            value = input.attributes.get("value", "")
+            name = urllib.parse.quote(name)
+            value = urllib.parse.quote(value)
+            # TODO this is not secure, need to escape values
+            body += "&" + name + "=" + value 
+        body = body[1:]
+        href = form.attributes.get("action", "")
+        if method == "get":
+            href += "?" + body
+            body = None
+        url = self.resolve_url(href)
+        self.load(url, readcache=False, payload=body)
+        self.state.pushlocation(url)
+
+    def resolve_url(self, urlstr):
+        parent = URL(self.state.get_url())
+        return URL(urlstr, parent=parent).get_str()
 
 
 class DocumentLayout:
@@ -1478,6 +1584,9 @@ class DocumentLayout:
         self.hstep = h
         self.vstep = v
 
+    def should_paint(self):
+        return True
+
     def paint(self):
         return []
 
@@ -1506,6 +1615,13 @@ class BlockLayout:
 
     def self_rect(self):
         return Rect(self.x, self.y, self.x + self.width, self.y + self.height)
+
+    def should_paint(self):
+        return (
+            isinstance(self.node, list)
+            or isinstance(self.node, Text)
+            or (self.node.tag != "input" and self.node.tag != "button")
+        )
 
     def paint(self):
         cmds = []
@@ -1673,14 +1789,35 @@ class BlockLayout:
             self.size = 12
             self.weight = "normal"
 
-    def recurse(self, tree):
-        if isinstance(tree, Text):
-            self.word(tree)
+    def recurse(self, node):
+        if isinstance(node, Text):
+            self.word(node)
         else:
-            self.open_tag(tree.tag)
-            for child in tree.children:
-                self.recurse(child)
-            self.close_tag(tree.tag)
+            self.open_tag(node.tag)
+            if node.tag == "input" or node.tag == "button":
+                self.input(node)
+            else:
+                for child in node.children:
+                    self.recurse(child)
+            self.close_tag(node.tag)
+
+    def input(self, node):
+        w = InputLayout.INPUT_WIDTH_PX
+        if self.cursor_x + w > self.width:
+            self.new_line()
+        line = self.children[-1]
+        previous_word = line.children[-1] if line.children else None
+        input = InputLayout(node, line, previous_word)
+        line.children.append(input)
+
+        weight = node.style["font-weight"]
+        style = node.style["font-style"]
+        if style == "normal":
+            style = "roman"
+        size = int(parse_size(node.style["font-size"]) * 0.75)
+        font = get_font("", size, weight, style)
+
+        self.cursor_x += w + font.measure(" ")
 
     def word(self, node: Text):
         # TODO remove duplicate, this should be part of TextLayout
@@ -1829,14 +1966,14 @@ class LineLayout:
         max_ascent = 0
         max_descent = 0
         if self.children:
-            max_ascent = max([word.font.metrics("ascent") for word in self.children])
+            max_ascent = max([word.get_ascent() for word in self.children])
             baseline = self.y + 1.25 * max_ascent
             for word in self.children:
-                word.y = baseline - word.font.metrics("ascent")
-            max_descent = max([word.font.metrics("descent") for word in self.children])
+                word.y = baseline - word.get_ascent()
+            max_descent = max([word.get_descent() for word in self.children])
 
         self.height = 1.25 * (max_ascent + max_descent)
-
+        
     # def flush(self, forceline=False):
     # if not self.line:
     #     if forceline:
@@ -1869,6 +2006,9 @@ class LineLayout:
 
     # self.cursor_x = 0
     # self.line = []
+
+    def should_paint(self):
+        return True
 
     def paint(self):
         return []
@@ -1935,6 +2075,15 @@ class TextLayout:
 
         self.height = self.font.metrics("linespace")
 
+    def get_ascent(self):
+        return self.font.metrics("ascent")
+
+    def get_descent(self):
+        return self.font.metrics("descent")
+
+    def should_paint(self):
+        return True
+
     def paint(self):
         rect = Rect(self.x, self.y, self.x + self.width, self.y + self.height)
         return [DrawText(rect, self.word, self.font, self.color, self.node)]
@@ -1943,8 +2092,146 @@ class TextLayout:
         return f"Text {repr(self.word)} {self.x},{self.y} {self.width},{self.height}"
 
 
+class InputLayout:
+    INPUT_WIDTH_PX = 200
+
+    def __init__(self, node, parent, previous):
+        self.node = node
+        self.children = []
+        self.parent = parent
+        self.previous = previous
+        self.ptop = 0
+        self.pbottom = 0
+
+    def layout(self):
+        node = self.node
+
+        # parse font style
+        style = node.style.get("font-style", "normal")
+        if style == "inherit":
+            style = "roman"  # todo actually inherit
+        elif style == "oblique" or style == "italic":
+            style = "italic"  # tk inter only supports
+        else:
+            style = "roman"  # normal style and default to roman
+
+        # parse font size
+        size_str = node.style.get("font-size", "16px")
+        if size_str == "inherit":
+            size = int(16 * 0.75)
+        else:
+            try:
+                size = int(float(size_str[:-2]) * 0.75)
+            except Exception as e:
+                print("Failed to parse size", size_str, e)
+                size = int(16 * 0.75)
+
+        font_family = node.style.get("font-family")
+
+        # parse font weight
+        weight = "normal"
+        font_weight = node.style.get("font-weight", "normal")
+        if font_weight.isnumeric():
+            if int(font_weight) >= 500:
+                weight = "bold"
+        elif font_weight == "bold":
+            weight = "bold"
+
+        self.color = node.style.get("color", "black")
+        self.font = get_font(font_family, size, weight, style)
+
+        self.width = InputLayout.INPUT_WIDTH_PX
+
+        thickness = 0
+        border = self.node.style.get("border-style")
+        if border and border != "none" and border != "hidden":
+            border_width = self.node.style.get("border-width")
+            thickness = parse_size(border_width)
+
+        ptop = pbottom = thickness
+        ptop += parse_size(self.node.style.get("padding-top"))
+        pbottom += parse_size(self.node.style.get("padding-bottom"))
+        self.ptop = ptop
+        self.pbottom = pbottom
+
+        if self.previous:
+            space = self.previous.font.measure(" ")
+            self.x = self.previous.x + space + self.previous.width
+        else:
+            self.x = self.parent.x
+
+        self.height = self.font.metrics("linespace") + ptop + pbottom
+
+    def should_paint(self):
+        return True
+
+    def paint(self):
+        cmds = []
+        bgcolor = self.node.style.get("background-color", "transparent")
+
+        if bgcolor != "transparent":
+            rect = DrawRect(self.self_rect(), bgcolor)
+            cmds.append(rect)
+
+        thickness = 0
+        border = self.node.style.get("border-style")
+        if border and border != "none" and border != "hidden":
+            border_color = self.node.style.get("border-color")
+            border_width = self.node.style.get("border-width")
+            thickness = parse_size(border_width)
+            cmds.append(DrawOutline(self.self_rect(), border_color, thickness))
+
+        ptop = pright = pbottom = pleft = thickness
+        ptop += parse_size(self.node.style.get("padding-top"))
+        pright += parse_size(self.node.style.get("padding-right"))
+        pbottom += parse_size(self.node.style.get("padding-bottom"))
+        pleft += parse_size(self.node.style.get("padding-left"))
+
+        text = self.get_text()
+        textwidth = self.font.measure(text)
+        align = self.node.style.get('text-align')
+        if align == "center":
+            rect = Rect(self.x + (self.width - textwidth) // 2, self.y + ptop, self.x + self.width - pright, self.y + self.height - pbottom)
+        else:
+            rect = Rect(self.x + pleft, self.y + ptop, self.x + self.width - pright, self.y + self.height - pbottom)
+
+        cmds.append(DrawText(rect, text, self.font, self.color, self.node))
+
+        if self.node.is_focused:
+            text = self.get_text()
+            textwidth = self.x + self.font.measure(text)
+            cmds.append(
+                DrawLine(textwidth + pleft, self.y + ptop, textwidth + pleft, self.y + self.height - pbottom, "black", 1)
+            )
+        return cmds
+
+    def get_text(self):
+        if self.node.tag == "input":
+            text = self.node.attributes.get("value", "")
+        elif self.node.tag == "button":
+            if len(self.node.children) == 1 and isinstance(self.node.children[0], Text):
+                text = self.node.children[0].text
+            else:
+                print("Ignoring HTML contents inside button")
+                text = ""
+        return text
+
+    def get_ascent(self):
+        return self.font.metrics("ascent") + self.ptop
+
+    def get_descent(self):
+        return self.font.metrics("descent") + self.pbottom
+
+    def self_rect(self):
+        return Rect(self.x, self.y, self.x + self.width, self.y + self.height)
+
+    def __repr__(self):
+        return f"Input {self.x},{self.y} {self.width},{self.height}"
+
+
 def paint_tree(layout_object, display_list):
-    display_list.extend(layout_object.paint())
+    if layout_object.should_paint():
+        display_list.extend(layout_object.paint())
 
     for child in layout_object.children:
         paint_tree(child, display_list)
@@ -2535,6 +2822,45 @@ class CSSParser:
                 if not parsed_color:
                     pairs["background-color"] = item
                     parsed_color = True
+        elif prop == "border":
+            width = "1px"
+            style = "solid"
+            color = "black"
+            parsed_size = False
+            parsed_color = False
+            for item in expression:
+                if item in ["solid", "dotted", "dashed", "inset", "outset", "ridge", "groove", "double", "none", "hidden"]:
+                    style = item
+                elif not parsed_size:
+                    width = item
+                    parsed_size = True
+                elif not parsed_color:
+                    color = item
+                    parsed_color = True
+            pairs["border-width"] = width
+            pairs["border-style"] = style
+            pairs["border-color"] = color
+        elif prop == "padding":
+            top = right = bottom = left = "0px"
+            if len(expression) >= 4:
+                top = expression[0]
+                right = expression[1]
+                bottom = expression[2]
+                left = expression[3]
+            elif len(expression) == 3:
+                top = expression[0]
+                right = left = expression[1]
+                bottom = expression[2]
+            elif len(expression) == 2:
+                top = bottom = expression[0]
+                right = left = expression[1]
+            elif len(expression) == 1:
+                top = right = bottom = left = expression[0]
+            pairs["padding-top"] = top
+            pairs["padding-right"] = right
+            pairs["padding-bottom"] = bottom
+            pairs["padding-left"] = left
+
         elif len(expression) == 1:
             pairs[prop] = expression[0]
 
@@ -2594,6 +2920,23 @@ def style(node, rules, depth=0):
 def cascade_priority(rule):
     selector, body = rule
     return selector.priority
+
+
+def parse_size(str):
+    if not str:
+        return 0.0
+    if str == "0":
+        return 0.0
+    if str.endswith("px"):
+        return float(str[:-2])
+    if str.endswith("%"):
+        return float(str[:-1])/100.0*16.0 # incorrect
+    if str.endswith("em"):
+        return float(str[:-2])*16.0 # incorrect
+    if str.endswith("rem"):
+        return float(str[:-2])*16.0 # incorrect
+    else:
+        return 16.0 # unhandle dformat
 
 
 class ImportantSelector:
@@ -2829,6 +3172,11 @@ def test_CSS_parse():
     results = parse("div { color: black !important; }")
     assert results[0][1]["color"] == "black"
 
+    results = parse("h1 { border: 1px solid black; }")
+    assert results[0][1]["border-width"] == "1px"
+    assert results[0][1]["border-style"] == "solid"
+    assert results[0][1]["border-color"] == "black"
+
 
 def test_HTML_parse_tree():
     def f(x):
@@ -2918,6 +3266,7 @@ def test_URL():
 
     url = URL("https://example.org:8080")
     assert url.port == 8080
+    assert url.get_str() == "https://example.org:8080/"
 
     url = URL("file:///path/to/file/index.html")
     assert url.scheme == "file"
