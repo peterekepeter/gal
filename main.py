@@ -839,7 +839,7 @@ class GUIBrowser:
     def pressarrowleft(self, e):
         self.chrome.pressarrowleft()
         self.draw()
-    
+
     def pressarrowright(self, e):
         self.chrome.pressarrowright()
         self.draw()
@@ -960,7 +960,7 @@ class GUIBrowser:
     def closetab(self, e):
         self.state.closetab()
         self.restorestate()
-    
+
     def newwindow(self, e):
         ui = GUIBrowser()
         state = BrowserState(None)
@@ -996,6 +996,7 @@ class GUIBrowser:
         self.state.save()
         self.history.save()
         import os
+
         os._exit(0)
 
 
@@ -1116,7 +1117,7 @@ class GUIChrome:
             self.move_address_bar_cursor(-1)
             return True
         return False
-    
+
     def pressarrowright(self):
         if self.focus == "address bar":
             self.move_address_bar_cursor(+1)
@@ -1125,7 +1126,7 @@ class GUIChrome:
 
     def move_address_bar_cursor(self, pos):
         nextpos = self.address_bar_cursor + pos
-        if nextpos < 0: 
+        if nextpos < 0:
             nextpos = 0
         if nextpos > len(self.address_bar):
             nextpos = len(self.address_bar)
@@ -1155,7 +1156,7 @@ class GUIChrome:
             txt = self.address_bar
             pos = self.address_bar_cursor
             if pos > 0:
-                txt = txt[:pos-1] + txt[pos:]
+                txt = txt[: pos - 1] + txt[pos:]
                 self.address_bar = txt
                 self.move_address_bar_cursor(-1)
             return True
@@ -1215,7 +1216,7 @@ class GUIChrome:
                     substr = checkstr
                 else:
                     break
-            cmds.append(DrawText(textbound, substr, self.font, "black"))
+            cmds.append(DrawText(textbound, substr, self.font, "black", None))
 
         # address bar buttons
         back_color = "black" if state.can_back() else "gray"
@@ -1234,9 +1235,9 @@ class GUIChrome:
         cmds.append(DrawOutline(self.address_rect, "black", 1))
         if self.focus == "address bar":
             cmds.append(
-                DrawText(self.address_txt_rect, self.address_bar, self.font, "black")
+                DrawText(self.address_txt_rect, self.address_bar, self.font, "black", None)
             )
-            text_before_cursor = self.address_bar[:self.address_bar_cursor]
+            text_before_cursor = self.address_bar[: self.address_bar_cursor]
             w = self.font.measure(text_before_cursor)
             cmds.append(
                 DrawLine(
@@ -1250,7 +1251,7 @@ class GUIChrome:
             )
         else:
             url = state.get_url()
-            cmds.append(DrawText(self.address_txt_rect, url, self.font, "black"))
+            cmds.append(DrawText(self.address_txt_rect, url, self.font, "black", None))
 
         return cmds
 
@@ -1272,7 +1273,7 @@ class GUIChrome:
     def _paint_button(self, cmds, outline_rect, txt, vpad=0, color="black"):
         r = self._layout_button_text(outline_rect, txt, vpad)
         cmds.append(DrawOutline(outline_rect, color, 1))
-        cmds.append(DrawText(r, txt, self.font, color))
+        cmds.append(DrawText(r, txt, self.font, color, None))
 
 
 class GUIBrowserTab:
@@ -1403,29 +1404,27 @@ class GUIBrowserTab:
     def click(self, x, y, button):
         y += self.scroll
 
-        objs = [
-            obj
-            for obj in tree_to_list(self.document, [])
-            if obj.x <= x < obj.x + obj.width and obj.y <= y < obj.y + obj.height
-        ]
+        travelurl = ""
+        for item in reversed(self.display_list):
+            if not item.rect.contains_point(x,y):
+                continue
+            if not hasattr(item, "node"):
+                continue
+            node = item.node
+            while node:
+                print(node)
+                if isinstance(node, Element) and node.tag == "a" and "href" in node.attributes:
+                    parent = URL(self.state.get_url())
+                    travelurl = URL(node.attributes["href"], parent=parent).get_str()
+                node = node.parent
 
-        if not objs:
-            return
-        elt = objs[-1].node
-
-        while elt:
-            if isinstance(elt, Text):
+        if travelurl:
+            if button == 1:
+                state.pushlocation(travelurl)
+            elif button == 2:
+                state.newtab(travelurl)
+            else:
                 pass
-            elif elt.tag == "a" and "href" in elt.attributes:
-                parent = URL(self.state.get_url())
-                url = URL(elt.attributes["href"], parent=parent).get_str()
-                if button == 1:
-                    state.pushlocation(url)
-                elif button == 2:
-                    state.newtab(url)
-                else:
-                    pass
-            elt = elt.parent
 
     def resize(self, width, height):
         if self.width == width and self.height == height:
@@ -1938,7 +1937,7 @@ class TextLayout:
 
     def paint(self):
         rect = Rect(self.x, self.y, self.x + self.width, self.y + self.height)
-        return [DrawText(rect, self.word, self.font, self.color)]
+        return [DrawText(rect, self.word, self.font, self.color, self.node)]
 
     def __repr__(self):
         return f"Text {repr(self.word)} {self.x},{self.y} {self.width},{self.height}"
@@ -1964,11 +1963,12 @@ def get_font(family, size, weight, style):
 
 
 class DrawText:
-    def __init__(self, rect, text, font, color):
+    def __init__(self, rect, text, font, color, node):
         self.rect = rect
         self.text = text
         self.font = font
         self.color = color
+        self.node = node
 
     def execute(self, scroll, canvas):
         canvas.create_text(
