@@ -699,7 +699,7 @@ class BrowserBookmarks:
 
     def get_count(self) -> int:
         return len(self.data["bookmarks"])
-    
+
     def get_title(self, url: str) -> str:
         item = self._get_item(url)
         return item.get("title", "") if item else url
@@ -735,7 +735,9 @@ def generate_bookmarks_page(bookmarks: BrowserBookmarks) -> str:
     result = ["<title>Bookmarks</title><style>small { color:green }</style>"]
     for url in bookmarks.get_urls():
         title = bookmarks.get_title(url)
-        result.append(f'<li><a href="{url}"><h2>{title}</h2><small>{url}</small></a></li>')
+        result.append(
+            f'<li><a href="{url}"><h2>{title}</h2><small>{url}</small></a></li>'
+        )
     return f"<ul>{''.join(result)}</ul>"
 
 
@@ -824,7 +826,7 @@ class GUIBrowser:
         w.bind("<Return>", self.pressenter)
         self.canvas = tkinter.Canvas(w, width=WIDTH, height=HEIGHT, bg="white")
         self.chrome = GUIChrome(self)
-        self.restorestate()
+        self.restorestate(is_startup=True)
         tkinter.mainloop()
 
     def scrollposupdate(self, amount=100):
@@ -869,7 +871,12 @@ class GUIBrowser:
     def locationreload(self, e):
         self.restorestate(readcache=False)
 
-    def restorestate(self, readcache=True):
+    def restorestate(self, readcache=True, is_startup=False):
+        if self.state.get_tab_count() == 0:
+            if is_startup:
+                self.newtab(None)
+            else:
+                self.exit_process()
         if not self.active_tab:
             self.active_tab = GUIBrowserTab(self)
             self.resize_active_tab()
@@ -960,6 +967,14 @@ class GUIBrowser:
         self.bookmarks.save()
         self.draw()
 
+    def exit_process(self):
+        self.bookmarks.save()
+        self.state.save()
+        self.history.save()
+        import os
+
+        os._exit(0)
+
 
 class GUIChrome:
     def __init__(self, browser: GUIBrowser):
@@ -1043,7 +1058,7 @@ class GUIChrome:
         self.focus = None
         if self.newtab_rect.contains_point(x, y):
             state.newtab("about:empty")
-        if self.bookmarks_rect.contains_point(x,y):
+        if self.bookmarks_rect.contains_point(x, y):
             self.browser.newbookmarkstab(None)
         elif self.back_rect.contains_point(x, y):
             state.back()
@@ -3021,6 +3036,7 @@ def test_BrowserBookmarks():
 
 if __name__ == "__main__":
     import sys
+    import signal
 
     ui = GUIBrowser()
     state = BrowserState(None)
