@@ -779,6 +779,8 @@ class GUIBrowser:
         w = self.window
         w.bind("<Up>", lambda e: self.scrollposupdate(-100))
         w.bind("<Down>", lambda e: self.scrollposupdate(+100))
+        w.bind("<Left>", self.pressarrowleft)
+        w.bind("<Right>", self.pressarrowright)
         w.bind("<MouseWheel>", lambda e: self.scrollposupdate(-e.delta))
         w.bind("<Button-1>", lambda e: self.click(e, 1))
         w.bind("<Button-2>", lambda e: self.click(e, 2))
@@ -831,6 +833,14 @@ class GUIBrowser:
 
     def scrollposupdate(self, amount=100):
         self.active_tab.scrollposupdate(amount)
+        self.draw()
+
+    def pressarrowleft(self, e):
+        self.chrome.pressarrowleft()
+        self.draw()
+    
+    def pressarrowright(self, e):
+        self.chrome.pressarrowright()
         self.draw()
 
     def pressbackspace(self, e):
@@ -1052,6 +1062,7 @@ class GUIChrome:
         )
         self.focus = None
         self.address_bar = ""
+        self.address_bar_cursor = 0
 
     def click(self, x, y, button):
         state: BrowserState = self.browser.state
@@ -1085,10 +1096,37 @@ class GUIChrome:
     def focusaddressbar(self):
         self.focus = "address bar"
         self.address_bar = ""
+        self.address_bar_cursor = 0
 
-    def input(self, char):
+    def pressarrowleft(self):
         if self.focus == "address bar":
-            self.address_bar += char
+            self.move_address_bar_cursor(-1)
+            return True
+        return False
+    
+    def pressarrowright(self):
+        if self.focus == "address bar":
+            self.move_address_bar_cursor(+1)
+            return True
+        return False
+
+    def move_address_bar_cursor(self, pos):
+        nextpos = self.address_bar_cursor + pos
+        if nextpos < 0: 
+            nextpos = 0
+        if nextpos > len(self.address_bar):
+            nextpos = len(self.address_bar)
+        self.address_bar_cursor = nextpos
+
+    def input(self, input_txt):
+        if self.focus == "address bar":
+            txt = self.address_bar
+            pos = self.address_bar_cursor
+            txt = txt[:pos] + input_txt + txt[pos:]
+            self.address_bar = txt
+            self.move_address_bar_cursor(len(input_txt))
+            return True
+        return False
 
     def enter(self):
         if self.focus == "address bar":
@@ -1101,7 +1139,12 @@ class GUIChrome:
 
     def pressbackspace(self):
         if self.focus == "address bar":
-            self.address_bar = self.address_bar[:-1]
+            txt = self.address_bar
+            pos = self.address_bar_cursor
+            if pos > 0:
+                txt = txt[:pos-1] + txt[pos:]
+                self.address_bar = txt
+                self.move_address_bar_cursor(-1)
             return True
         return False
 
@@ -1180,7 +1223,8 @@ class GUIChrome:
             cmds.append(
                 DrawText(self.address_txt_rect, self.address_bar, self.font, "black")
             )
-            w = self.font.measure(self.address_bar)
+            text_before_cursor = self.address_bar[:self.address_bar_cursor]
+            w = self.font.measure(text_before_cursor)
             cmds.append(
                 DrawLine(
                     self.address_rect.left + self.padding + w,
