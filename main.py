@@ -822,6 +822,7 @@ class GUIBrowser:
         w.bind("<Control-t>", self.newtab)
         w.bind("<Control-F4>", self.closetab)
         w.bind("<Control-u>", self.viewsource)
+        w.bind("<Control-n>", self.newwindow)
         w.bind("<Control-b>", self.newbookmarkstab)
         w.bind("<Control-d>", lambda e: self.toggle_bookmark())
         w.bind("<Key>", self.handlekey)
@@ -886,7 +887,7 @@ class GUIBrowser:
             if is_startup:
                 self.newtab(None)
             else:
-                self.exit_process()
+                self.close_window()
         if not self.active_tab:
             self.active_tab = GUIBrowserTab(self)
             self.resize_active_tab()
@@ -959,6 +960,13 @@ class GUIBrowser:
     def closetab(self, e):
         self.state.closetab()
         self.restorestate()
+    
+    def newwindow(self, e):
+        ui = GUIBrowser()
+        state = BrowserState(None)
+        history = self.history
+        bookmarks = self.bookmarks
+        ui.start(state, history, bookmarks)
 
     def viewsource(self, e):
         url = self.state.get_url()
@@ -977,12 +985,17 @@ class GUIBrowser:
         self.bookmarks.save()
         self.draw()
 
-    def exit_process(self):
+    def close_window(self):
+        self.bookmarks.save()
+        self.state.save()
+        self.history.save()
+        self.window.quit()
+
+    def close_all_windows(self):
         self.bookmarks.save()
         self.state.save()
         self.history.save()
         import os
-
         os._exit(0)
 
 
@@ -3080,7 +3093,6 @@ def test_BrowserBookmarks():
 
 if __name__ == "__main__":
     import sys
-    import signal
 
     ui = GUIBrowser()
     state = BrowserState(None)
