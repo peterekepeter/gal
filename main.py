@@ -918,6 +918,7 @@ class GUIBrowser:
         if e.y < self.chrome.bottom:
             self.focus = None
             self.chrome.click(x, y, button)
+            self.active_tab.blur()
         else:
             self.focus = "content"
             self.chrome.blur()
@@ -1190,7 +1191,7 @@ class GUIChrome:
         state = self.browser.state
         cmds = []
 
-        cmds.append(DrawRect(Rect(0, 0, width, self.bottom), "white"))
+        cmds.append(DrawRect(Rect(0, 0, width, self.bottom), "white", None))
         cmds.append(DrawLine(0, self.bottom, width, self.bottom, "black", 1))
         self._paint_button(cmds, self.bookmarks_rect, "☰")
         self._paint_button(cmds, self.newtab_rect, "+")
@@ -1255,7 +1256,7 @@ class GUIChrome:
         self._paint_button(cmds, self.bookmark_rect, bookmark_icon)
 
         # address bar input
-        cmds.append(DrawOutline(self.address_rect, "black", 1))
+        cmds.append(DrawOutline(self.address_rect, "black", 1, None))
         if self.focus == "address bar":
             cmds.append(
                 DrawText(
@@ -1297,7 +1298,7 @@ class GUIChrome:
 
     def _paint_button(self, cmds, outline_rect, txt, vpad=0, color="black"):
         r = self._layout_button_text(outline_rect, txt, vpad)
-        cmds.append(DrawOutline(outline_rect, color, 1))
+        cmds.append(DrawOutline(outline_rect, color, 1, None))
         cmds.append(DrawText(r, txt, self.font, color, None))
 
 
@@ -1461,21 +1462,29 @@ class GUIBrowserTab:
             if not hasattr(item, "node"):
                 continue
             node = item.node
-            while node:
-                if isinstance(node, Element):
-                    if node.tag == "a" and "href" in node.attributes:
-                        travelurl = self.resolve_url(node.attributes["href"])
-                        self.focus = node
-                    elif node.tag == "input":
+            break
+        while node:
+            if isinstance(node, Element):
+                if node.tag == "a" and "href" in node.attributes:
+                    travelurl = self.resolve_url(node.attributes["href"])
+                    self.focus = node
+                elif node.tag == "input":
+                    nodetype = node.attributes.get("type")
+                    if nodetype == "checkbox":
+                        if hasattr(node, "ischecked"):
+                            node.ischecked = not node.ischecked
+                        else:
+                            node.ischecked = True
+                    else:
                         node.attributes["value"] = ""
-                        need_render = True
-                        self.focus = node
-                    elif node.tag == "button":
-                        form_submit = True
-                        self.focus = node
-                    elif node.tag == "form" and "action" in node.attributes:
-                        form = node
-                node = node.parent
+                    need_render = True
+                    self.focus = node
+                elif node.tag == "button":
+                    form_submit = True
+                    self.focus = node
+                elif node.tag == "form" and "action" in node.attributes:
+                    form = node
+            node = node.parent
 
         if self.focus:
             self.focus.is_focused = True
@@ -1493,6 +1502,12 @@ class GUIBrowserTab:
                 state.newtab(travelurl)
             else:
                 pass
+
+    def blur(self):
+        if self.focus:
+            self.focus.is_focused = False
+            self.focus = None
+            self.render()
 
     def input(self, txt):
         if self.focus:
@@ -1534,11 +1549,14 @@ class GUIBrowserTab:
         body = ""
         for input in inputs:
             import urllib.parse
-
+            type = input.attributes.get("type")
             name = input.attributes["name"]
             value = input.attributes.get("value", "")
             name = urllib.parse.quote(name)
             value = urllib.parse.quote(value)
+            if type == "checkbox":
+                if not hasattr(input, "ischecked") or not input.ischecked:
+                    continue
             # TODO this is not secure, need to escape values
             body += "&" + name + "=" + value 
         body = body[1:]
@@ -1630,14 +1648,14 @@ class BlockLayout:
             bgcolor = self.node.style.get("background-color", "transparent")
 
             if bgcolor != "transparent":
-                rect = DrawRect(self.self_rect(), bgcolor)
+                rect = DrawRect(self.self_rect(), bgcolor, self.node)
                 cmds.append(rect)
 
             if self.node.tag == "li":
                 x = self.x - 8
                 y = self.y + 14
                 rect = Rect(x - 2, y - 2, x + 2, y + 2)
-                cmd = DrawRect(rect, "#000")
+                cmd = DrawRect(rect, "#000", self.node)
                 cmds.append(cmd)
 
         return cmds
@@ -1802,7 +1820,7 @@ class BlockLayout:
             self.close_tag(node.tag)
 
     def input(self, node):
-        w = InputLayout.INPUT_WIDTH_PX
+        w = InputLayout.determine_width(node)
         if self.cursor_x + w > self.width:
             self.new_line()
         line = self.children[-1]
@@ -2093,7 +2111,17 @@ class TextLayout:
 
 
 class InputLayout:
-    INPUT_WIDTH_PX = 200
+
+    CHECKBOX_SIZE = 16
+
+    def determine_width(node):
+        nodetype = node.attributes.get("type")
+        if nodetype == "checkbox":
+            return InputLayout.CHECKBOX_SIZE
+        stylewidth = node.style.get("width")
+        if stylewidth:
+            return parse_size(stylewidth)
+        return 200
 
     def __init__(self, node, parent, previous):
         self.node = node
@@ -2140,7 +2168,7 @@ class InputLayout:
         self.color = node.style.get("color", "black")
         self.font = get_font(font_family, size, weight, style)
 
-        self.width = InputLayout.INPUT_WIDTH_PX
+        self.width = InputLayout.determine_width(self.node)
 
         thickness = 0
         border = self.node.style.get("border-style")
@@ -2160,6 +2188,11 @@ class InputLayout:
         else:
             self.x = self.parent.x
 
+        if node.attributes.get("type") == "checkbox":
+            self.width = InputLayout.CHECKBOX_SIZE
+            self.height = InputLayout.CHECKBOX_SIZE
+            return
+
         self.height = self.font.metrics("linespace") + ptop + pbottom
 
     def should_paint(self):
@@ -2168,9 +2201,15 @@ class InputLayout:
     def paint(self):
         cmds = []
         bgcolor = self.node.style.get("background-color", "transparent")
+        drawtext = True
+        drawcheck = False
+
+        if self.node.attributes.get("type") == "checkbox":
+            drawtext = False
+            drawcheck = True
 
         if bgcolor != "transparent":
-            rect = DrawRect(self.self_rect(), bgcolor)
+            rect = DrawRect(self.self_rect(), bgcolor, self.node)
             cmds.append(rect)
 
         thickness = 0
@@ -2179,7 +2218,7 @@ class InputLayout:
             border_color = self.node.style.get("border-color")
             border_width = self.node.style.get("border-width")
             thickness = parse_size(border_width)
-            cmds.append(DrawOutline(self.self_rect(), border_color, thickness))
+            cmds.append(DrawOutline(self.self_rect(), border_color, thickness, self.node))
 
         ptop = pright = pbottom = pleft = thickness
         ptop += parse_size(self.node.style.get("padding-top"))
@@ -2195,14 +2234,19 @@ class InputLayout:
         else:
             rect = Rect(self.x + pleft, self.y + ptop, self.x + self.width - pright, self.y + self.height - pbottom)
 
-        cmds.append(DrawText(rect, text, self.font, self.color, self.node))
+        if drawtext:
+            cmds.append(DrawText(rect, text, self.font, self.color, self.node))
 
-        if self.node.is_focused:
-            text = self.get_text()
-            textwidth = self.x + self.font.measure(text)
-            cmds.append(
-                DrawLine(textwidth + pleft, self.y + ptop, textwidth + pleft, self.y + self.height - pbottom, "black", 1)
-            )
+            if self.node.is_focused:
+                text = self.get_text()
+                textwidth = self.x + self.font.measure(text)
+                cmds.append(
+                    DrawLine(textwidth + pleft, self.y + ptop, textwidth + pleft, self.y + self.height - pbottom, "black", 1)
+                )
+        if drawcheck:
+            if hasattr(self.node, "ischecked") and self.node.ischecked:
+                cmds.append(DrawRect(self.self_rect(3), "black", self.node))
+
         return cmds
 
     def get_text(self):
@@ -2222,8 +2266,8 @@ class InputLayout:
     def get_descent(self):
         return self.font.metrics("descent") + self.pbottom
 
-    def self_rect(self):
-        return Rect(self.x, self.y, self.x + self.width, self.y + self.height)
+    def self_rect(self, pad=0):
+        return Rect(self.x+pad, self.y+pad, self.x + self.width-pad, self.y + self.height-pad)
 
     def __repr__(self):
         return f"Input {self.x},{self.y} {self.width},{self.height}"
@@ -2269,9 +2313,10 @@ class DrawText:
 
 
 class DrawRect:
-    def __init__(self, rect, color):
+    def __init__(self, rect, color, node):
         self.rect = rect
         self.color = color
+        self.node = node
 
     def execute(self, scroll, canvas):
         canvas.create_rectangle(
@@ -2285,10 +2330,11 @@ class DrawRect:
 
 
 class DrawOutline:
-    def __init__(self, rect, color, thickness):
+    def __init__(self, rect, color, thickness, node):
         self.rect = rect
         self.color = color
         self.thickness = thickness
+        self.node = node
 
     def execute(self, scroll, canvas):
         canvas.create_rectangle(
