@@ -184,7 +184,7 @@ class URL:
         if payload:
             length = len(payload.encode("utf8"))
             reqlines.append("Content-Length: {}\r\n".format(length))
-        reqlines.append("\r\n") # end of headers
+        reqlines.append("\r\n")  # end of headers
         if payload:
             reqlines.append(payload)
         request = "".join(reqlines)
@@ -492,6 +492,10 @@ class BrowserState:
         item = self._get_current_item()
         return item.get("url", "")
 
+    def get_payload(self) -> str:
+        item = self._get_current_item()
+        return item.get("payload")
+
     def get_scroll(self) -> int:
         item = self._get_current_item()
         return item.get("scroll")
@@ -519,7 +523,7 @@ class BrowserState:
             self.data["active_tab_index"] = active
             self.dirty = True
 
-    def pushlocation(self, url):
+    def pushlocation(self, url, payload=None):
         item = self._get_current_item()
         to_return_to = self._create_return_item()
         history_list = item.get("history", [])
@@ -527,13 +531,17 @@ class BrowserState:
         item["history"] = history_list
         if "future" in item:
             item.pop("future")
-        self.replacelocation(url)
+        self.replacelocation(url, payload)
         self.dirty = True
 
-    def replacelocation(self, url):
+    def replacelocation(self, url, payload):
         item = self._get_current_item()
         if item.get("url", "") != url:
             item["url"] = url
+            if payload:
+                item["payload"] = payload
+            elif "payload" in item:
+                del item["payload"]
             if "scroll" in item:
                 item.pop("scroll")
             self.dirty = True
@@ -629,15 +637,21 @@ class BrowserState:
         scroll = self.get_scroll()
         if scroll:
             backitem["scroll"] = scroll
+        payload = self.get_payload()
+        if payload:
+            backitem["payload"] = payload
         return backitem
 
     def _copy_item_locaiton_state(self, src, dst):
         dst["url"] = src.get("url", "")
         dst["scroll"] = src.get("scroll", 0)
+        dst["payload"] = src.get("payload", None)
         if dst["scroll"] == 0:
             dst.pop("scroll")
         if dst["url"] == "":
             dst.pop("url")
+        if not dst["payload"]:
+            dst.pop("payload")
 
 
 class BrowserHistory:
@@ -896,9 +910,9 @@ class GUIBrowser:
         self.restorestate()
 
     def locationreload(self, e):
-        self.restorestate(readcache=False)
+        self.restorestate(isreload=True)
 
-    def restorestate(self, readcache=True, is_startup=False):
+    def restorestate(self, is_startup=False, isreload=False):
         if self.state.get_tab_count() == 0:
             if is_startup:
                 self.newtab(None)
@@ -907,7 +921,7 @@ class GUIBrowser:
         if not self.active_tab:
             self.active_tab = GUIBrowserTab(self)
             self.resize_active_tab()
-        self.active_tab.restorestate(readcache)
+        self.active_tab.restorestate(isreload=isreload)
         self.draw()
         url = self.state.get_url()
         self.history.visited(url)
@@ -1111,7 +1125,7 @@ class GUIChrome:
         elif self.forward_rect.contains_point(x, y):
             state.forward()
         elif self.reload_rect.contains_point(x, y):
-            self.browser.restorestate(readcache=False)
+            self.browser.locationreload(None)
         elif self.bookmark_rect.contains_point(x, y):
             self.browser.toggle_bookmark()
         elif self.address_rect.contains_point(x, y):
@@ -1314,29 +1328,54 @@ class GUIBrowserTab:
         self.nodes = None
         self.focus = None
         self.loaded = ""
+        self.loadedpayload = ""
+        self.toload = ""
+        self.topayload = ""
+        self.display_list = []
+        self.scroll_bottom = 0
+        self.rules = []
+        self.modal = None
 
     def browse(self, url):
         self.state.browse(url)
         self.start(self.state)
 
-    def restorestate(self, readcache):
+    def restorestate(self, isreload=False):
         self.scroll = self.state.get_scroll() or 0
         url = self.state.get_url()
-        if url != self.loaded:
-            self.load(self.state.get_url(), readcache)
+        payload = self.state.get_payload()
+        if not isreload and url == self.loaded and payload == self.loadedpayload:
+            # already loaded
+            return
+        if payload:
+            # with POST request we must get user confirmation
+            self.toload = url
+            self.topayload = payload
+            rect = Rect(0, 0, self.width, self.height)
+            dialog = rect.create_dialog(500, 200)
+            self.modal = HTMLView(
+                dialog,
+                """
+                <form style=\"background:white;border:2px solid black;padding:16px\">
+                    <p>To display this page, the browser must send information that will repeat any action (such as a search or order confirmation) that was performed earlier.</p>
+                    <button formaction=submitpayload>Yes</button>
+                    <button formaction=closedialog>No</button>
+                </form>
+            """,
+            )
+            self.render()
+            return
+    
+        # proceed with loading GET requests only
+        self.load(self.state.get_url(), readcache=not isreload)
 
     def load(self, urlstr, readcache, payload=None):
-        global default_style_sheet
-
         self.loaded = ""
+        self.loadedpayload = ""
         if urlstr == "" or urlstr.isspace():
             urlstr = "about:blank"
 
-        if default_style_sheet is None:
-            with open("browser.css") as f:
-                text = f.read()
-                default_style_sheet = CSSParser(text).parse()
-
+        self.modal = None
         self.title(urlstr)
         try:
             url = URL(urlstr)
@@ -1362,7 +1401,7 @@ class GUIBrowserTab:
         self.nodes = parser_class(result).parse()
 
         # resolve CSS
-        rules = default_style_sheet.copy()
+        rules = get_initial_styling_rules()
         nodelist = tree_to_list(self.nodes, [])
         for node in nodelist:
             if isinstance(node, Element):
@@ -1401,18 +1440,23 @@ class GUIBrowserTab:
                         self.scroll = item.y
                         self.limitscrollinbounds()
                         break
-        
+
         self.loaded = url.get_str()
+        self.loadedpayload = payload
 
     def render(self):
-        style(self.nodes, sorted(self.rules, key=cascade_priority))
-        self.document = DocumentLayout(self.nodes)
-        self.document.set_size(self.width, self.height)
-        self.document.set_step(self.hstep, self.vstep)
-        self.document.layout()
         self.display_list = []
-        self.scroll_bottom = self.document.height
-        paint_tree(self.document, self.display_list)
+        if self.nodes:
+            style(self.nodes, sorted(self.rules, key=cascade_priority))
+            self.document = DocumentLayout(self.nodes)
+            self.document.set_size(self.width, self.height)
+            self.document.set_step(self.hstep, self.vstep)
+            self.document.layout()
+            self.scroll_bottom = self.document.height
+            paint_tree(self.document, self.display_list)
+        if self.modal:
+            rect = Rect(0, 0, self.width, self.height)
+            self.display_list.append(DrawRect(rect, "black", None, opacity=0.2))
 
     def draw(self, canvas):
         for cmd in self.display_list:
@@ -1434,6 +1478,10 @@ class GUIBrowserTab:
                 fill="#000",
             )
 
+        if self.modal:
+            for cmd in self.modal.display_list:
+                cmd.execute(-self.modal.rect.top-self.top, canvas, hscroll=-self.modal.rect.left)
+
     def scrollposupdate(self, amount=100):
         self.scroll += amount
         self.limitscrollinbounds()
@@ -1447,7 +1495,17 @@ class GUIBrowserTab:
             self.scroll = 0
 
     def click(self, x, y, button):
-        y += self.scroll
+
+        if self.modal:
+            node = self.modal.click(x,y,button)
+            if isinstance(node, Element):
+                action = node.attributes.get("formaction")
+                if action == "submitpayload":
+                    self.load(self.toload, readcache=False, payload=self.topayload)
+                if action == "closedialog":
+                    self.modal = None
+                self.render()
+            return
 
         if self.focus:
             self.focus.is_focused = False
@@ -1456,6 +1514,10 @@ class GUIBrowserTab:
         form_submit = False
         form = None
         travelurl = ""
+        node = None
+
+        y += self.scroll
+
         for item in reversed(self.display_list):
             if not item.rect.contains_point(x, y):
                 continue
@@ -1534,7 +1596,7 @@ class GUIBrowserTab:
     def submit_form(self, form):
         while form and form.tag != "form":
             form = form.parent
-        
+
         if not form:
             return
 
@@ -1549,6 +1611,7 @@ class GUIBrowserTab:
         body = ""
         for input in inputs:
             import urllib.parse
+
             type = input.attributes.get("type")
             name = input.attributes["name"]
             value = input.attributes.get("value", "")
@@ -1558,7 +1621,7 @@ class GUIBrowserTab:
                 if not hasattr(input, "ischecked") or not input.ischecked:
                     continue
             # TODO this is not secure, need to escape values
-            body += "&" + name + "=" + value 
+            body += "&" + name + "=" + value
         body = body[1:]
         href = form.attributes.get("action", "")
         if method == "get":
@@ -1566,11 +1629,55 @@ class GUIBrowserTab:
             body = None
         url = self.resolve_url(href)
         self.load(url, readcache=False, payload=body)
-        self.state.pushlocation(url)
+        self.state.pushlocation(url, payload=body)
 
     def resolve_url(self, urlstr):
         parent = URL(self.state.get_url())
         return URL(urlstr, parent=parent).get_str()
+
+
+class HTMLView:
+    def __init__(self, rect, html=""):
+        self.rect = rect
+        self.width = rect.right - rect.left
+        self.height = rect.bottom - rect.top
+        self.set_innerHTML(html)
+        self.focus = None
+
+    def set_innerHTML(self, html):
+        self.nodes = HTMLParser(html).parse()
+        self.rules = get_initial_styling_rules()
+        self.render()
+
+    def render(self):
+        self.display_list = []
+        style(self.nodes, sorted(self.rules, key=cascade_priority))
+        self.document = DocumentLayout(self.nodes)
+        self.document.set_size(self.width, self.height)
+        self.document.set_step(0, 0)
+        self.document.layout()
+        self.scroll_bottom = self.document.height
+        paint_tree(self.document, self.display_list)
+
+    def click(self, x, y, button):
+        x -= self.rect.left
+        y -= self.rect.top
+        if self.focus:
+            self.focus.is_focused = False
+            self.focus = None
+        for item in reversed(self.display_list):
+            if not item.rect.contains_point(x, y):
+                continue
+            if not hasattr(item, "node"):
+                continue
+            return item.node
+        return None
+
+    def blur(self):
+        if self.focus:
+            self.focus.is_focused = False
+            self.focus = None
+            self.render()
 
 
 class DocumentLayout:
@@ -1822,7 +1929,7 @@ class BlockLayout:
     def input(self, node):
         w = InputLayout.determine_width(node)
         if self.cursor_x + w > self.width:
-            self.new_line()
+            self.newline()
         line = self.children[-1]
         previous_word = line.children[-1] if line.children else None
         input = InputLayout(node, line, previous_word)
@@ -1991,7 +2098,7 @@ class LineLayout:
             max_descent = max([word.get_descent() for word in self.children])
 
         self.height = 1.25 * (max_ascent + max_descent)
-        
+
     # def flush(self, forceline=False):
     # if not self.line:
     #     if forceline:
@@ -2111,7 +2218,6 @@ class TextLayout:
 
 
 class InputLayout:
-
     CHECKBOX_SIZE = 16
 
     def determine_width(node):
@@ -2218,7 +2324,9 @@ class InputLayout:
             border_color = self.node.style.get("border-color")
             border_width = self.node.style.get("border-width")
             thickness = parse_size(border_width)
-            cmds.append(DrawOutline(self.self_rect(), border_color, thickness, self.node))
+            cmds.append(
+                DrawOutline(self.self_rect(), border_color, thickness, self.node)
+            )
 
         ptop = pright = pbottom = pleft = thickness
         ptop += parse_size(self.node.style.get("padding-top"))
@@ -2228,11 +2336,21 @@ class InputLayout:
 
         text = self.get_text()
         textwidth = self.font.measure(text)
-        align = self.node.style.get('text-align')
+        align = self.node.style.get("text-align")
         if align == "center":
-            rect = Rect(self.x + (self.width - textwidth) // 2, self.y + ptop, self.x + self.width - pright, self.y + self.height - pbottom)
+            rect = Rect(
+                self.x + (self.width - textwidth) // 2,
+                self.y + ptop,
+                self.x + self.width - pright,
+                self.y + self.height - pbottom,
+            )
         else:
-            rect = Rect(self.x + pleft, self.y + ptop, self.x + self.width - pright, self.y + self.height - pbottom)
+            rect = Rect(
+                self.x + pleft,
+                self.y + ptop,
+                self.x + self.width - pright,
+                self.y + self.height - pbottom,
+            )
 
         if drawtext:
             cmds.append(DrawText(rect, text, self.font, self.color, self.node))
@@ -2241,7 +2359,14 @@ class InputLayout:
                 text = self.get_text()
                 textwidth = self.x + self.font.measure(text)
                 cmds.append(
-                    DrawLine(textwidth + pleft, self.y + ptop, textwidth + pleft, self.y + self.height - pbottom, "black", 1)
+                    DrawLine(
+                        textwidth + pleft,
+                        self.y + ptop,
+                        textwidth + pleft,
+                        self.y + self.height - pbottom,
+                        "black",
+                        1,
+                    )
                 )
         if drawcheck:
             if hasattr(self.node, "ischecked") and self.node.ischecked:
@@ -2267,7 +2392,12 @@ class InputLayout:
         return self.font.metrics("descent") + self.pbottom
 
     def self_rect(self, pad=0):
-        return Rect(self.x+pad, self.y+pad, self.x + self.width-pad, self.y + self.height-pad)
+        return Rect(
+            self.x + pad,
+            self.y + pad,
+            self.x + self.width - pad,
+            self.y + self.height - pad,
+        )
 
     def __repr__(self):
         return f"Input {self.x},{self.y} {self.width},{self.height}"
@@ -2293,6 +2423,17 @@ def get_font(family, size, weight, style):
     return FONTS[key][0]
 
 
+def get_initial_styling_rules():
+    global default_style_sheet
+
+    if default_style_sheet is None:
+        with open("browser.css") as f:
+            text = f.read()
+            default_style_sheet = CSSParser(text).parse()
+
+    return default_style_sheet.copy()
+
+
 class DrawText:
     def __init__(self, rect, text, font, color, node):
         self.rect = rect
@@ -2301,9 +2442,9 @@ class DrawText:
         self.color = color
         self.node = node
 
-    def execute(self, scroll, canvas):
+    def execute(self, scroll, canvas, hscroll=0):
         canvas.create_text(
-            self.rect.left,
+            self.rect.left - hscroll,
             self.rect.top - scroll,
             text=self.text,
             font=self.font,
@@ -2313,19 +2454,32 @@ class DrawText:
 
 
 class DrawRect:
-    def __init__(self, rect, color, node):
+    def __init__(self, rect, color, node, opacity=1.0):
         self.rect = rect
         self.color = color
         self.node = node
+        self.fill = color
+        if opacity > 0.9:
+            self.stipple = None
+        elif opacity > 0.6:
+            self.stipple = "gray75"
+        elif opacity > 0.3:
+            self.stipple = "gray50"
+        elif opacity > 0.1:
+            self.stipple = "gray25"
+        else:
+            self.stipple = None
+            self.fill = None
 
-    def execute(self, scroll, canvas):
+    def execute(self, scroll, canvas, hscroll=0):
         canvas.create_rectangle(
-            self.rect.left,
+            self.rect.left - hscroll,
             self.rect.top - scroll,
-            self.rect.right,
+            self.rect.right - hscroll,
             self.rect.bottom - scroll,
             width=0,
-            fill=self.color,
+            fill=self.fill,
+            stipple=self.stipple,
         )
 
 
@@ -2336,11 +2490,11 @@ class DrawOutline:
         self.thickness = thickness
         self.node = node
 
-    def execute(self, scroll, canvas):
+    def execute(self, scroll, canvas, hscroll=0):
         canvas.create_rectangle(
-            self.rect.left,
+            self.rect.left - hscroll,
             self.rect.top - scroll,
-            self.rect.right,
+            self.rect.right - hscroll,
             self.rect.bottom - scroll,
             width=self.thickness,
             outline=self.color,
@@ -2353,11 +2507,11 @@ class DrawLine:
         self.color = color
         self.thickness = thickness
 
-    def execute(self, scroll, canvas):
+    def execute(self, scroll, canvas, hscroll=0):
         canvas.create_line(
-            self.rect.left,
+            self.rect.left - hscroll,
             self.rect.top - scroll,
-            self.rect.right,
+            self.rect.right - hscroll,
             self.rect.bottom - scroll,
             fill=self.color,
             width=self.thickness,
@@ -2373,6 +2527,26 @@ class Rect:
 
     def contains_point(self, x, y):
         return x >= self.left and x < self.right and y >= self.top and y < self.bottom
+
+    def create_dialog(self, width, height):
+        left = (self.left + self.right - width) // 2
+        top = (self.top + self.bottom - height) // 2
+        right = left + width
+        bottom = top + height
+        return Rect(
+            max(self.left, left),
+            max(self.top, top),
+            min(self.right, right),
+            min(self.bottom, bottom),
+        )
+
+    def pad(self, amount):
+        return Rect(
+            self.left + amount,
+            self.top + amount,
+            self.right - amount,
+            self.bottom - amount,
+        )
 
 
 class HTMLParser:
@@ -2875,7 +3049,18 @@ class CSSParser:
             parsed_size = False
             parsed_color = False
             for item in expression:
-                if item in ["solid", "dotted", "dashed", "inset", "outset", "ridge", "groove", "double", "none", "hidden"]:
+                if item in [
+                    "solid",
+                    "dotted",
+                    "dashed",
+                    "inset",
+                    "outset",
+                    "ridge",
+                    "groove",
+                    "double",
+                    "none",
+                    "hidden",
+                ]:
                     style = item
                 elif not parsed_size:
                     width = item
@@ -2976,13 +3161,13 @@ def parse_size(str):
     if str.endswith("px"):
         return float(str[:-2])
     if str.endswith("%"):
-        return float(str[:-1])/100.0*16.0 # incorrect
+        return float(str[:-1]) / 100.0 * 16.0  # incorrect
     if str.endswith("em"):
-        return float(str[:-2])*16.0 # incorrect
+        return float(str[:-2]) * 16.0  # incorrect
     if str.endswith("rem"):
-        return float(str[:-2])*16.0 # incorrect
+        return float(str[:-2]) * 16.0  # incorrect
     else:
-        return 16.0 # unhandle dformat
+        return 16.0  # unhandle dformat
 
 
 class ImportantSelector:
@@ -3472,6 +3657,14 @@ def test_BrowserState():
     state.closetabindex(1)
     assert state.get_url() == "https://another.com"
     assert state.get_tab_count() == 1
+
+    # with payload
+    state.pushlocation("https://example.com", payload="&subscribe=on")
+    assert state.get_payload() == "&subscribe=on"
+    state.pushlocation("https://another.com")
+    assert state.get_payload() is None
+    state.back()
+    assert state.get_payload() == "&subscribe=on"
 
 
 def test_BrowserBookmarks():
