@@ -446,6 +446,71 @@ class JsonFileState:
             json.dump(self.data, f, indent=1)
 
 
+class CustomDirPaths:
+    def __init__(self, dirname):
+        assert dirname
+        self._dirname = dirname
+
+    def ensure_exists(self):
+        import os
+
+        os.makedirs(self._dirname, exists_ok=True) # all same
+        self.state_dir = self._dirname
+        self.cache_dir = self._dirname
+        self.data_dir = self._dirname
+        self.config_dir = self._dirname
+
+class UserDirPaths:
+    def __init__(self, subdirname):
+        self._subdir = subdirname
+    
+    def ensure_exists(self):
+        import os
+        self._home = os.environ.get("HOME")
+        assert self._home
+        self.state_dir = self._resolve("XDG_STATE_HOME", ".local/state")
+        self.cache_dir = self._resolve("XDG_CACHE_HOME", ".cache")
+        self.data_dir = self._resolve("XDG_DATA_HOME", ".local/share")
+        self.config_dir = self._resolve("XDG_CONFIG_HOME", ".config")
+        
+    def _resolve(self, var, fallback):
+        import os
+        dir = os.environ.get(var) or os.path.join(self._home, fallback)    
+        dir = os.path.join(dir, self._subdir)
+        os.makedirs(dir, exist_ok=True)
+        return dir
+
+class NoDiskAccessPaths:
+    def ensure_exists(self):
+        self.state_dir = None
+        self.cache_dir = None
+        self.data_dir = None
+        self.config_dir = None
+
+class BrowserData:
+    def __init__(self):
+        self.is_private = False
+        self._custom_dir = None
+    
+    def restore(self):
+        global http_cache_dir
+
+        if self.is_private:
+            self.paths = NoDiskAccessPaths()
+        elif self._custom_dir:
+            self.paths = CustomDirPaths(self._custom_dir)
+        else:
+            self.paths = UserDirPaths("gal")
+        self.paths.ensure_exists()
+        self.state = BrowserState(self.paths.state_dir)
+        self.history = BrowserHistory(self.paths.data_dir)
+        self.bookmarks = BrowserBookmarks(self.paths.data_dir)
+        http_cache_dir = self.paths.cache_dir
+        self.state.restore()
+        self.history.restore()
+        self.bookmarks.restore()
+
+
 class BrowserState:
     def __init__(self, profile_dir):
         self.file = (
@@ -782,16 +847,17 @@ class GUIBrowser:
         self.canvas = None
         self.chrome = None
         self.active_tab = None
+        self.focus = None
         pass
 
-    def start(self, state, history, bookmarks):
-        self.state: BrowserState = state
-        self.history: BrowserHistory = history
-        self.bookmarks: BrowserBookmarks = bookmarks
+    def start(self, data):
+        self.state: BrowserState = data.state
+        self.history: BrowserHistory = data.history
+        self.bookmarks: BrowserBookmarks = data.bookmarks
 
         import tkinter
 
-        WIDTH, HEIGHT = state.get_window_size()
+        WIDTH, HEIGHT = self.state.get_window_size()
         HSTEP, VSTEP = 12, 18
 
         self.width = WIDTH
@@ -1559,9 +1625,9 @@ class GUIBrowserTab:
 
         if travelurl:
             if button == 1:
-                state.pushlocation(travelurl)
+                self.state.pushlocation(travelurl)
             elif button == 2:
-                state.newtab(travelurl)
+                self.state.newtab(travelurl)
             else:
                 pass
 
@@ -1590,7 +1656,7 @@ class GUIBrowserTab:
             self.limitscrollinbounds()
 
     def title(self, str):
-        state.set_title(str)
+        self.state.set_title(str)
         self.browser.title(str)
 
     def submit_form(self, form):
@@ -3683,24 +3749,18 @@ if __name__ == "__main__":
     import sys
 
     ui = GUIBrowser()
-    state = BrowserState(None)
-    history = BrowserHistory(None)
-    bookmarks = BrowserBookmarks(None)
+    data = BrowserData()
     parsearg = None
     for arg in sys.argv[1:]:
         if parsearg:
-            if parsearg == "--cache-dir":
-                http_cache_dir = arg
-                state = BrowserState(http_cache_dir)
-                state.restore()
-                history = BrowserHistory(http_cache_dir)
-                history.restore()
-                bookmarks = BrowserBookmarks(http_cache_dir)
-                bookmarks.restore()
+            if parsearg == "--profile-dir":
+                data.usedir(arg)
             parsearg = None
         elif arg.startswith("-"):
             flag = arg
-            if "--gui" == flag:
+            if "--private" == flag:
+                data.makeprivate()  
+            elif "--gui" == flag:
                 ui = GUIBrowser()
             elif "--cli" == flag:
                 ui = CLI()
@@ -3712,12 +3772,13 @@ if __name__ == "__main__":
                 print("gal web browser")
             elif flag == "--rtl":
                 default_rtl = True
-            elif "--cache-dir" == flag:
-                parsearg = flag
+            elif flag in ["--cache-dir", "--profile-dir", "--profile"]:
+                parsearg = "--profile-dir"
             else:
                 raise Exception(f"unknown flag '{flag}'")
         else:
             url = arg
             state.newtab(url)
 
-    ui.start(state, history, bookmarks)
+    data.restore()
+    ui.start(data)
