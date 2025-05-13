@@ -1,6 +1,6 @@
 import socket
 
-ENTRIES = ["John was here"]
+data_dir = "./data"
 PORT = 8000
 
 
@@ -40,6 +40,7 @@ def handle_connection(conx):
         status, body = do_request(method, url, headers, body)
     except Exception as e:
         import traceback
+
         print(traceback.format_exc())
         print(e)
         status = "500 Internal Server Error"
@@ -70,6 +71,7 @@ def do_request(method, url, headers, body):
     else:
         return "404 Not Found", not_found(url, method)
 
+
 def get_query_single_value(query, key, default):
     if key not in query:
         return default
@@ -78,6 +80,7 @@ def get_query_single_value(query, key, default):
     if len(list) == 0:
         return default
     return list[0]
+
 
 def form_decode(body):
     import urllib.parse
@@ -93,8 +96,33 @@ def form_decode(body):
 
 def add_entry(params):
     if "guest" in params:
-        ENTRIES.append(params["guest"])
+        message = params["guest"]
+        data_append(message)
+
     return show_comments()
+
+
+def data_get_path():
+    return data_dir + "/guestbook.txt"
+
+
+def data_append(message):
+    import os
+
+    message = message.replace("\n", " ").strip()
+    os.makedirs(data_dir, exist_ok=True)
+    with open(data_get_path(), "a") as f:
+        f.write(message + "\n")
+
+
+def data_get_all():
+    import os
+
+    fname = data_get_path()
+    if os.path.isfile(fname):
+        with open(fname) as f:
+            return f.read().split("\n")
+    return []
 
 
 def not_found(url, method):
@@ -105,12 +133,16 @@ def not_found(url, method):
 
 def show_comments(flt=""):
     import html
+
     print(repr(flt))
     out = "<!doctype html>\n"
     out += "<title>Guestbook</title>\n"
     # unsafe
-    out += f"<form action=/ method=get><input name=q value=\"{html.escape(flt)}\"><button>Search!</button></form>\n"
-    for entry in ENTRIES:
+    out += f'<form action=/ method=get><input name=q value="{html.escape(flt)}"><button>Search!</button></form>\n'
+    out += "<h2>Guestbook</h2>"
+    entries = data_get_all()
+    out += f"<p>{len(entries)} post(s)</p>"
+    for entry in entries:
         if flt in entry:
             out += "<p>" + entry + "</p>\n"
     out += "<form action=add method=post>\n"
