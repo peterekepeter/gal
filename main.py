@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 sock_pool = {}
 http_cache = {}
 font_cache = {}
