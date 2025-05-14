@@ -2862,7 +2862,7 @@ class HTMLParser:
                 open_tags == ["html", "head"] and tag not in ["/head"] + self.HEAD_TAGS
             ):
                 self.add_tag("/head")
-            elif open_tags and open_tags[-1] == tag and tag in ["p", "li"]:
+            elif open_tags and open_tags[-1] == tag and tag in ["p", "li", "button"]:
                 self.add_tag("/" + tag)
             elif open_tags and open_tags[-1] == "li" and tag in ["/ul", "/ol"]:
                 self.add_tag("/li")
