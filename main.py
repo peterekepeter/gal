@@ -468,6 +468,8 @@ class UserDirPaths:
     def ensure_exists(self):
         import os
         self._home = os.environ.get("HOME")
+        if not self._home:
+            self._home = os.environ.get("USERPROFILE") # windows
         assert self._home
         self.state_dir = self._resolve("XDG_STATE_HOME", ".local/state")
         self.cache_dir = self._resolve("XDG_CACHE_HOME", ".cache")
