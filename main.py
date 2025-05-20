@@ -1869,7 +1869,6 @@ class BlockLayout:
             mode = "inline"
         else:
             raise Exception("unreachable layout mode!!")
-
         if mode == "none":
             self.width = 0
             self.height = 0
@@ -2140,7 +2139,7 @@ class BlockLayout:
 
 
 class LineLayout:
-    def __init__(self, node, parent, previous):
+    def __init__(self, node, parent, previous, textalign="left"):
         self.node = node
         self.parent = parent
         self.previous = previous
@@ -2369,6 +2368,38 @@ class InputLayout:
             return
 
         self.height = self.font.metrics("linespace") + ptop + pbottom
+        self.y = self.parent.y
+
+        if node.tag == "button" and not (len(self.node.children) == 1 and isinstance(self.node.children[0], Text)):
+            list = []
+            previous = None
+            for item in node.children:
+                if item.style.get("display", "inline") == "inline":
+                    list.append(item)
+                else:
+                    if list:
+                        child = BlockLayout(list, self, previous)
+                        self.children.append(child)
+                        previous = child
+                        list = []
+                    
+                    child = BlockLayout(item, self, previous)
+                    self.children.append(child)
+                    previous = child
+            if list:
+                child = BlockLayout(list, self, previous)
+                self.children.append(child)
+                previous = child
+
+            for child in self.children:
+                child.set_size(self.width, self.height)
+                child.set_step(0, 0)
+                child.x = self.x
+                child.y = self.y
+                child.layout()
+
+
+
 
     def should_paint(self):
         return True
@@ -2382,6 +2413,10 @@ class InputLayout:
         if self.node.attributes.get("type") == "checkbox":
             drawtext = False
             drawcheck = True
+
+        if self.children:
+            drawtext = False
+
 
         if bgcolor != "transparent":
             rect = DrawRect(self.self_rect(), bgcolor, self.node)
@@ -2441,6 +2476,7 @@ class InputLayout:
             if hasattr(self.node, "ischecked") and self.node.ischecked:
                 cmds.append(DrawRect(self.self_rect(3), "black", self.node))
 
+
         return cmds
 
     def get_text(self):
@@ -2450,7 +2486,6 @@ class InputLayout:
             if len(self.node.children) == 1 and isinstance(self.node.children[0], Text):
                 text = self.node.children[0].text
             else:
-                print("Ignoring HTML contents inside button")
                 text = ""
         return text
 
@@ -3180,6 +3215,7 @@ INHERITED_PROPERTIES = {
     "font-family": "",
     "color": "black",
     "white-space": "normal",
+    "text-align": "left",
 }
 
 
