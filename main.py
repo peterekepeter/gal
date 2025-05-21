@@ -359,6 +359,7 @@ class Element:
         self.parent = parent
         self.style = {}
         self.is_focused = False
+        self.cursor = 0
 
     def get_text(self):
         return "".join([c.get_text() for c in self.children])
@@ -920,8 +921,10 @@ class GUIBrowser:
         w.bind("<Control-d>", lambda e: self.toggle_bookmark())
         w.bind("<Key>", self.handlekey)
         w.bind("<Return>", self.pressenter)
+        w.bind("<Control-Alt-c>", lambda e: self.toggle_chrome())
         self.canvas = tkinter.Canvas(w, width=WIDTH, height=HEIGHT, bg="white")
-        self.chrome = GUIChrome(self)
+        # self.chrome = GUIChrome(self)
+        self.chrome = HTMLChrome(self)
         self.restorestate(is_startup=True)
         tkinter.mainloop()
 
@@ -1017,6 +1020,7 @@ class GUIBrowser:
             return
         self.width = e.width
         self.height = e.height
+        self.chrome.resize(self.width, self.height)
         self.resize_active_tab()
         self.draw()
         self.state.set_window_size(self.width, self.height)
@@ -1061,6 +1065,11 @@ class GUIBrowser:
         self.restorestate()
         self.state.save()
 
+    def addressbarsubmit(self, value):
+        if "/" not in value and ":" not in value:
+            value = default_search_engine + value
+        self.state.pushlocation(value)
+
     def closetab(self, e):
         self.state.closetab()
         self.restorestate()
@@ -1099,9 +1108,15 @@ class GUIBrowser:
         self.bookmarks.save()
         self.state.save()
         self.history.save()
-        import os
 
-        os._exit(0)
+    def toggle_chrome(self):
+        if isinstance(self.chrome, GUIChrome):
+            self.chrome = HTMLChrome(self)
+        else:
+            self.chrome = GUIChrome(self)
+        self.chrome.resize(self.width, self.height)
+        self.resize_active_tab()
+        self.draw()
 
 
 class GUIChrome:
@@ -1109,8 +1124,14 @@ class GUIChrome:
         self.browser = browser
         self.font = get_font("", 12, "normal", "roman")
         self.font_height = self.font.metrics("linespace")
+        self.focus = None
+        self.address_bar = ""
+        self.address_bar_cursor = 0
+        self.resize(browser.width, browser.height)
+
+    def resize(self, width, height):
         # base layout
-        self.width = browser.width
+        self.width = width
         self.padding = 5
         self.tabwidth = 150
         self.tabbar_top = 0
@@ -1178,9 +1199,6 @@ class GUIChrome:
             self.address_rect.right,
             self.address_rect.bottom,
         )
-        self.focus = None
-        self.address_bar = ""
-        self.address_bar_cursor = 0
 
     def click(self, x, y, button):
         state: BrowserState = self.browser.state
@@ -1251,11 +1269,8 @@ class GUIChrome:
 
     def enter(self):
         if self.focus == "address bar":
-            state = self.browser.state
             location = self.address_bar
-            if "/" not in location and ":" not in location:
-                location = default_search_engine + location
-            state.pushlocation(location)
+            self.browser.addressbarsubmit(location)
             self.focus = None
 
     def pressbackspace(self):
@@ -1383,6 +1398,154 @@ class GUIChrome:
         r = self._layout_button_text(outline_rect, txt, vpad)
         cmds.append(DrawOutline(outline_rect, color, 1, None))
         cmds.append(DrawText(r, txt, self.font, color, None))
+
+
+
+class HTMLChrome:
+    def __init__(self, browser):
+        self.rect = Rect(0, 0, 600, 80)
+        self.bottom = self.rect.bottom
+        self._view = HTMLView(self.rect)
+        self._renderred_bookmark_icon = ""
+        self._renderred_url = ""
+        self._renderred_tab_index = -1
+        self._parsed_css = False
+        self.browser = browser
+
+    def click(self, x, y, button):
+        self._view.click(x,y,button)
+        node = self._view.click(x,y,button)
+        state = self.browser.state
+        while node:
+            if isinstance(node, Element):
+                attr = node.attributes
+                action = attr.get("formaction") or attr.get("href")
+                
+                if action == None:
+                    pass
+                elif action == "bookmarks":
+                    self.browser.newbookmarkstab(None)
+                elif action == "newtab":
+                    state.newtab("about:blank")
+                elif action == "back":
+                    state.back()
+                elif action == "forward":
+                    state.forward()
+                elif action == "reload":
+                    self.browser.locationreload(None)
+                elif action == "bookmark":
+                    self.browser.toggle_bookmark()
+                elif action.startswith("showtab/"):
+                    _, var = action.split("/")
+                    if button == 2:
+                        state.closetabindex(int(var))
+                    else:
+                        state.switchtab(int(var))
+                elif action.startswith("close/"):
+                    _, var = action.split("/")
+                    state.closetabindex(int(var))
+                elif not action:
+                    pass
+                else:
+                    print("action not handled:", action)
+                break
+            node=node.parent
+
+    def blur(self):
+        self._view.blur()
+
+    def focusaddressbar(self):
+        node = query_selector("input", self._view.nodes)
+        self._view.focus_on_node(node)
+        pass
+
+    def pressarrowleft(self):
+        self._view.pressarrowleft()
+
+    def pressarrowright(self):
+        self._view.pressarrowright()
+
+    def input(self, input_txt):
+        self._view.input(input_txt)
+
+    def enter(self):
+        if not self._view.enter() and self._view.focus:
+            node = self._view.focus
+            if node.attributes.get("name") == "url":
+                value = node.attributes.get("value", "")
+                self.browser.addressbarsubmit(value)
+
+    def pressbackspace(self):
+        self._view.pressbackspace()
+
+    def resize(self, width, height):
+        self.rect = Rect(0, 0, width, height)
+        self._view.set_rect(self.rect)
+        self._view.layout()
+        self._view.paint()
+
+    def paint(self):
+        self._renderHTML()
+        return self._view.display_list
+
+    def _renderHTML(self):
+        state = self.browser.state
+        active_tab_index = state.get_active_tab_index()
+        url = state.get_url()
+        bookmark_icon = (
+            "\u2605"
+            if self.browser.bookmarks.contains(self.browser.state.get_url())
+            else "\u2606"
+        )
+
+        # HTML re-render is expensive, check if really needed
+        if active_tab_index == self._renderred_tab_index and url == self._renderred_url and bookmark_icon == self._renderred_bookmark_icon:
+            return
+        self._renderred_tab_index = active_tab_index
+        self._renderred_url = url
+        self._renderred_bookmark_icon = bookmark_icon
+
+        if not self._parsed_css:
+            self._view.set_CSS("""
+                body { background:white !important; }
+                .bottom { background: black; height: 1px; }
+                a { color: black; }
+                input { width: 500px }
+            """)
+            self._parsed_css = True # lazy
+
+        tabs = []
+        for i in range(state.get_tab_count()):
+            str = state.get_title_by_index(i)
+            if len(str) > 20:
+                str = str[:20] + "..."
+            # TODO escape html
+            if i == active_tab_index:
+                tabs.append("<b>")
+            tabs.append(f"<a href=showtab/{i}>{str}</a>")
+            if i == active_tab_index:
+                tabs.append(f"</b><a href=close/{i}>x</a>")
+        self._view.set_innerHTML(f"""
+            <body>
+                <div>
+                    <a href=bookmarks>☰</a>
+                    <a href=newtab>+</a>
+                    {"".join(tabs)}
+                </div>
+                <div>
+                    <a href=back>&lt;</a>
+                    <a href=forward>&gt;</a>
+                    <a href=reload>\u21ba</a>
+                    <a href=bookmark>{bookmark_icon}</a>
+                    <input name=url value="{url}"/>
+                </div>
+                <div class="bottom"></div>
+            </body>
+        """)
+        self._view.layout()
+        self._view.paint()
+        self.bottom = self._view.scroll_bottom
+        self.rect = Rect(0, 0, self.rect.right, self.bottom)
 
 
 class GUIBrowserTab:
@@ -1707,26 +1870,99 @@ class GUIBrowserTab:
 
 class HTMLView:
     def __init__(self, rect, html=""):
-        self.rect = rect
-        self.width = rect.right - rect.left
-        self.height = rect.bottom - rect.top
+        self.set_rect(rect)
+        self.set_CSS("")
         self.set_innerHTML(html)
         self.focus = None
 
+    def set_rect(self, rect):
+        self.rect = rect
+        self.width = rect.right - rect.left
+        self.height = rect.bottom - rect.top
+
+    def set_CSS(self, csstext):
+        self.rules = get_initial_styling_rules()
+        self.rules.extend(CSSParser(csstext).parse())
+
     def set_innerHTML(self, html):
         self.nodes = HTMLParser(html).parse()
-        self.rules = get_initial_styling_rules()
         self.render()
 
     def render(self):
-        self.display_list = []
+        self.layout()
+        self.paint()
+
+    def layout(self):
         style(self.nodes, sorted(self.rules, key=cascade_priority))
         self.document = DocumentLayout(self.nodes)
         self.document.set_size(self.width, self.height)
         self.document.set_step(0, 0)
         self.document.layout()
         self.scroll_bottom = self.document.height
+    
+    def paint(self):
+        self.display_list = []
         paint_tree(self.document, self.display_list)
+
+    def focus_on_node(self, node):
+        self.blur()
+        # assmes node is from this view
+        self.focus = node
+        self.focus.is_focused = True
+        
+    def input(self, input_txt):
+        if self.focus and self.focus.tag == "input":
+            node = self.focus
+            attr = node.attributes
+            type = attr.get("type")
+            if type and type != "text":
+                return False
+            txt = attr.get("value", "")
+            pos = node.cursor
+            attr["value"] = txt[:pos] + input_txt + txt[pos:]
+            node.cursor = max(0, min(len(txt) + 1, node.cursor + len(input_txt)))
+            self.paint()
+            return True
+        return False
+
+    def pressbackspace(self):
+        if self.focus and self.focus.tag == "input":
+            node = self.focus
+            attr = node.attributes
+            type = attr.get("type")
+            if type and type != "text":
+                return False
+            txt = attr.get("value", "")
+            pos = node.cursor
+            if pos > 0:
+                attr["value"] = txt[: pos - 1] + txt[pos:]
+                self.address_bar = txt
+            node.cursor = max(0, node.cursor - 1)
+            self.paint()
+            return True
+        return False
+
+    def pressarrowleft(self):
+        return self._movecursor(-1)
+
+    def pressarrowright(self):
+        return self._movecursor(+1)
+
+    def _movecursor(self, amount):
+        if self.focus and self.focus.tag == "input":
+            node = self.focus
+            attr = node.attributes
+            type = attr.get("type")
+            if type and type != "text":
+                return False
+            txt = attr.get("value", "")
+            node.cursor = max(0, min(len(txt) + 1, node.cursor + amount))
+            self.paint()
+            return True
+        return False
+        
+    def enter(self):
+        return False
 
     def click(self, x, y, button):
         x -= self.rect.left
@@ -1739,8 +1975,34 @@ class HTMLView:
                 continue
             if not hasattr(item, "node"):
                 continue
-            return item.node
-        return None
+            node = item.node
+            break
+        need_render = False
+        while node:
+            # logic is somewhat duplicated from browser tab
+            if isinstance(node, Element):
+                if node.tag == "a" and "href" in node.attributes or node.tag == "button":
+                    self.focus = node
+                if node.tag == "input":
+                    nodetype = node.attributes.get("type")
+                    if nodetype == "checkbox":
+                        if hasattr(node, "ischecked"):
+                            node.ischecked = not node.ischecked
+                        else:
+                            node.ischecked = True
+                    else:
+                        node.attributes["value"] = ""
+                    need_render = True
+                    self.focus = node
+            node = node.parent
+
+        if self.focus:
+            self.focus.is_focused = True
+
+        if need_render:
+            self.render()
+
+        return self.focus
 
     def blur(self):
         if self.focus:
@@ -2461,7 +2723,8 @@ class InputLayout:
 
             if self.node.is_focused:
                 text = self.get_text()
-                textwidth = self.x + self.font.measure(text)
+                pos = self.node.cursor
+                textwidth = self.x + self.font.measure(text[0:pos])
                 cmds.append(
                     DrawLine(
                         textwidth + pleft,
@@ -2513,6 +2776,17 @@ def paint_tree(layout_object, display_list):
 
     for child in layout_object.children:
         paint_tree(child, display_list)
+
+
+def query_selector(selector, node):
+    css = CSSParser(selector + "{ color: red }").parse()
+    # baseurl = ""
+    for node in tree_to_list(node, []):
+        # eval_visited(node, baseurl, visited)
+        for rule in css:
+            if rule[0].matches(node):
+                return node
+    return None
 
 
 def get_font(family, size, weight, style):
