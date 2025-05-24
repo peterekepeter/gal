@@ -7,10 +7,12 @@ http_cache_blob_dir = None
 default_rtl = False
 default_style_sheet = None
 default_search_engine = "https://lite.duckduckgo.com/lite?q="
+default_js_runtime = None
 
 
 class URL:
     def __init__(self, url, parent=None):
+        url = url.replace("\\", "/")
         self.fragment = ""
         self.search = ""
         if parent:
@@ -423,6 +425,87 @@ def print_tree(node, indent=0):
     print(" " * indent, node)
     for child in node.children:
         print_tree(child, indent + 2)
+
+
+class JSContext:
+    def __init__(self, tab):
+        self.interp = None
+        self.tab = tab
+        self.node_to_handle = {}
+        self.handle_to_node = {}
+        try:
+            import dukpy
+            self.interp = dukpy.JSInterpreter()
+        except Exception as e:
+            print("JS not avaiable, please install dukjs:", e)
+        if self.interp:
+            self._register_functions()
+            self._load_runtime()
+
+    def run(self, path, code):
+        if not self.interp: 
+            return
+
+        import dukpy
+        try:
+            return self.interp.evaljs(code)
+        except dukpy.JSRuntimeError as e:
+            print("Script crashed", path, e)
+
+    def dispatch_event(self, type, elt):
+        handle = self.node_to_handle.get(elt, -1)
+        code = "__dispatch_event(dukpy.handle, dukpy.type)"
+        do_default = self.interp.evaljs(code, type=type, handle=handle)
+        return not do_default
+
+    def _load_runtime(self):
+        self.run("runtine.js", get_js_runtime_code())
+
+
+    def _register_functions(self):
+        js = self.interp
+        js.export_function("log", print)
+        js.export_function("querySelectorAll", self._querySelectorAll)
+        js.export_function("getAttribute", self._getAttribute)
+        js.export_function("innerHTML_set", self._innerHTML_set)
+
+    def _innerHTML_set(self, handle, html):
+        doc = HTMLParser("<html><body>" + html + "</body></html>").parse()
+        new_nodes = doc.children[0].children
+        elt = self.handle_to_node[handle]
+        elt.children = new_nodes
+        for child in elt.children:
+            child.parent = elt
+
+
+    def _querySelectorAll(self, selector):
+        nodes = query_selector_all(selector, self.tab.nodes)
+        handles = [self._get_handle(node) for node in nodes]
+        return handles
+
+    def _getAttribute(self, handle, attr):
+        elt = self.handle_to_node[handle]
+        attr = elt.attributes.get(attr, None)
+        return attr if attr else ""
+
+    def _get_handle(self, elt):
+        if elt not in self.node_to_handle:
+            handle = len(self.node_to_handle)
+            self.node_to_handle[elt] = handle
+            self.handle_to_node[handle] = elt
+        else:
+            handle = self.node_to_handle[elt]
+        return handle
+
+
+def get_js_runtime_code():
+    global default_js_runtime
+
+    if default_js_runtime is None:
+        with open("runtime.js") as f:
+            default_js_runtime = f.read()
+
+    return default_js_runtime
 
 
 class JsonFileState:
@@ -1567,6 +1650,7 @@ class GUIBrowserTab:
         self.scroll_bottom = 0
         self.rules = []
         self.modal = None
+        self.js = None
 
     def browse(self, url):
         self.state.browse(url)
@@ -1647,13 +1731,24 @@ class GUIBrowserTab:
                         style_url = URL(link, parent=url)
                         try:
                             body = style_url.request()
-                        except Exception:
+                        except Exception as e:
+                            print("failed to load stylesheet", style_url, e)
                             continue
                         rules.extend(CSSParser(body).parse())
                 elif node.tag == "style":
                     rules.extend(CSSParser(node.get_text()).parse())
                 elif node.tag == "title":
                     self.title(node.get_text())
+                elif node.tag == "script":
+                    src = node.attributes.get("src")
+                    try:
+                        script_url = URL(src, parent=url)
+                        code = script_url.request()
+                        if not self.js:
+                            self.js = JSContext(self)
+                        self.js.run(script_url, code)
+                    except Exception as e:
+                        print("failed to load script", url, src, script_url, e)
 
         self.rules = rules
 
@@ -1760,10 +1855,14 @@ class GUIBrowserTab:
         while node:
             if isinstance(node, Element):
                 if node.tag == "a" and "href" in node.attributes:
+                    if self.js.dispatch_event('click', node): 
+                        return
                     travelurl = self.resolve_url(node.attributes["href"])
                     self.focus = node
                 elif node.tag == "input":
                     nodetype = node.attributes.get("type")
+                    if self.js.dispatch_event('click', node):
+                        return
                     if nodetype == "checkbox":
                         if hasattr(node, "ischecked"):
                             node.ischecked = not node.ischecked
@@ -1774,6 +1873,8 @@ class GUIBrowserTab:
                     need_render = True
                     self.focus = node
                 elif node.tag == "button":
+                    if self.js.dispatch_event('click', node):
+                        return
                     form_submit = True
                     self.focus = node
                 elif node.tag == "form" and "action" in node.attributes:
@@ -1805,11 +1906,15 @@ class GUIBrowserTab:
 
     def input(self, txt):
         if self.focus:
+            if self.js.dispatch_event("keydown", self.focus):
+                return
             self.focus.attributes["value"] += txt
             self.render()
 
     def pressenter(self):
         if self.focus:
+            if self.js.dispatch_event("keydown", self.focus):
+                return
             self.submit_form(self.focus)
 
     def resize(self, width, height):
@@ -1830,6 +1935,9 @@ class GUIBrowserTab:
             form = form.parent
 
         if not form:
+            return
+        
+        if self.js.dispatch_event("submit", form):
             return
 
         inputs = [
@@ -2787,6 +2895,18 @@ def query_selector(selector, node):
             if rule[0].matches(node):
                 return node
     return None
+
+
+def query_selector_all(selector, node):
+    css = CSSParser(selector + "{ color: red }").parse()
+    result = []
+    # baseurl = ""
+    for node in tree_to_list(node, []):
+        # eval_visited(node, baseurl, visited)
+        for rule in css:
+            if rule[0].matches(node):
+                result.append(node)
+    return result
 
 
 def get_font(family, size, weight, style):
@@ -3907,7 +4027,7 @@ def test_URL():
 
     url = URL("C:\\Users\\someone\\index.html")
     assert url.scheme == "file"
-    assert url.path == "C:\\Users\\someone\\index.html"
+    assert url.path == "C:/Users/someone/index.html"
 
     url = URL("/home/username/file.html")
     assert url.scheme == "file"
@@ -3949,6 +4069,11 @@ def test_URL():
     assert url.scheme == "about"
     assert url.path == "blank"
     assert url.get_str() == "about:blank"
+
+    url = URL("file://C:\\www\\page.html")
+    url = URL("main.js", parent=url)
+    assert url.scheme == "file"
+    assert url.path == "C:/www/main.js"
 
 
 def test_BrowserState():
