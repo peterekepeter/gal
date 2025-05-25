@@ -1,0 +1,11 @@
+<ul>
+    <li></li>
+    <li></li>
+    <li></li>
+</ul>
+<script>
+    if (document.querySelectorAll('ul')[0].children.length != 3) {
+        throw new Error("children returned wrong count")
+    }
+    document.title = "passed"
+</script>

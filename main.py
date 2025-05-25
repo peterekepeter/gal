@@ -450,7 +450,7 @@ class JSContext:
         try:
             return self.interp.evaljs(code)
         except dukpy.JSRuntimeError as e:
-            print("Script crashed", path, e)
+            print("Script", path, "crashed:\n", e)
 
     def dispatch_event(self, type, elt):
         handle = self.node_to_handle.get(elt, -1)
@@ -468,6 +468,9 @@ class JSContext:
         js.export_function("querySelectorAll", self._querySelectorAll)
         js.export_function("getAttribute", self._getAttribute)
         js.export_function("innerHTML_set", self._innerHTML_set)
+        js.export_function("children_get", self._children_get)
+        js.export_function("document_set_title", self.tab.set_title)
+        js.export_function("document_get_title", self.tab.get_title)
 
     def _innerHTML_set(self, handle, html):
         doc = HTMLParser("<html><body>" + html + "</body></html>").parse()
@@ -487,6 +490,10 @@ class JSContext:
         elt = self.handle_to_node[handle]
         attr = elt.attributes.get(attr, None)
         return attr if attr else ""
+
+    def _children_get(self, handle):
+        parent = self.handle_to_node[handle]
+        return [self._get_handle(node) for node in parent.children if isinstance(node, Element)]
 
     def _get_handle(self, elt):
         if elt not in self.node_to_handle:
@@ -597,6 +604,9 @@ class BrowserData:
         self.history.restore()
         self.bookmarks.restore()
 
+    def makeprivate(self):
+        self.is_private = True
+
 
 class BrowserState:
     def __init__(self, profile_dir):
@@ -625,6 +635,7 @@ class BrowserState:
             if not str:
                 item.pop("title")
             self.dirty = True
+        return str
 
     def get_title(self):
         index = self.get_active_tab_index()
@@ -935,13 +946,16 @@ class GUIBrowser:
         self.chrome = None
         self.active_tab = None
         self.focus = None
-        pass
 
-    def start(self, data):
+    def setup(self, data):
         self.state: BrowserState = data.state
         self.history: BrowserHistory = data.history
         self.bookmarks: BrowserBookmarks = data.bookmarks
+        if not self.window:
+            self.setup_window()
+        self.restorestate(is_startup=True)
 
+    def setup_window(self):
         import tkinter
 
         WIDTH, HEIGHT = self.state.get_window_size()
@@ -1008,7 +1022,9 @@ class GUIBrowser:
         self.canvas = tkinter.Canvas(w, width=WIDTH, height=HEIGHT, bg="white")
         # self.chrome = GUIChrome(self)
         self.chrome = HTMLChrome(self)
-        self.restorestate(is_startup=True)
+
+    def mainloop(self):
+        import tkinter
         tkinter.mainloop()
 
     def scrollposupdate(self, amount=100):
@@ -1692,7 +1708,7 @@ class GUIBrowserTab:
             urlstr = "about:blank"
 
         self.modal = None
-        self.title(urlstr)
+        self.set_title(urlstr)
         try:
             url = URL(urlstr)
         except Exception as err:
@@ -1738,17 +1754,22 @@ class GUIBrowserTab:
                 elif node.tag == "style":
                     rules.extend(CSSParser(node.get_text()).parse())
                 elif node.tag == "title":
-                    self.title(node.get_text())
+                    self.set_title(node.get_text())
                 elif node.tag == "script":
                     src = node.attributes.get("src")
+                    script_url = src
                     try:
-                        script_url = URL(src, parent=url)
-                        code = script_url.request()
+                        if src:
+                            script_url = URL(src, parent=url)
+                            code = script_url.request()
+                        else:
+                            script_url = url
+                            code = node.get_text()
                         if not self.js:
                             self.js = JSContext(self)
                         self.js.run(script_url, code)
                     except Exception as e:
-                        print("failed to load script", url, src, script_url, e)
+                        print("failed to load script", url, script_url, e)
 
         self.rules = rules
 
@@ -1926,9 +1947,12 @@ class GUIBrowserTab:
             self.render()
             self.limitscrollinbounds()
 
-    def title(self, str):
-        self.state.set_title(str)
-        self.browser.title(str)
+    def set_title(self, titlestr):
+        self.state.set_title(titlestr)
+        self.browser.title(titlestr)
+
+    def get_title(self):
+        return self.state.get_title()
 
     def submit_form(self, form):
         while form and form.tag != "form":
@@ -2016,7 +2040,8 @@ class HTMLView:
         self.blur()
         # assmes node is from this view
         self.focus = node
-        self.focus.is_focused = True
+        if node:
+            self.focus.is_focused = True
         
     def input(self, input_txt):
         if self.focus and self.focus.tag == "input":
@@ -4182,6 +4207,48 @@ def test_BrowserBookmarks():
     bm.toggle("https://example.com", "Example")
     assert bm.get_count() == 0
 
+def wtest(browser):
+    import os
+    import time
+
+    totalstart = time.time()
+    wdata = BrowserData()
+    wdata.makeprivate()
+    wdata.restore()
+    browser.setup(wdata)
+    wtestdir = URL("wtest", parent=URL(__file__)).path
+    browser.state.newtab("about:blank")
+    failed = []
+    raised = []
+    items = os.listdir(wtestdir)
+    reset = "\x1b[30m"
+    for item in items:
+        try:
+            start = time.time()
+            itempath = wtestdir + "/" + item
+            browser.state.replacelocation(itempath, None)
+            browser.restorestate()
+            end = time.time()
+            itempassed = browser.state.get_title() == "passed"
+            if not itempassed: 
+                failed.append(item)
+            ms = int((end-start)*1000)
+            print(item, itempassed, ms, "ms")
+        except Exception as err:
+            import traceback
+            print("Error: excetion during wtest", item, err)
+            print(traceback.format_exc())
+            raised.append(err)
+
+    browser.state.closetab()
+    totalend = time.time()
+    totalms = int((totalend - totalstart)*1000)
+    if len(failed) != 0:
+        print("\x1b[31mwtest failed", failed, "test(s)", totalms, "ms", reset)
+        raise raised[0] if len(raised) > 0 else Exception("wtest condition not met")
+    else:
+        print("\x1b[32mwtest all tests passed!", totalms, "ms", reset)
+
 
 if __name__ == "__main__":
     import sys
@@ -4204,6 +4271,8 @@ if __name__ == "__main__":
                 ui = CLI()
             elif "--test" == flag:
                 test()
+            elif "--wtest" == flag:
+                wtest(ui)
             elif "--version" == flag:
                 print("1.0.0")
             elif "--help" == flag:
@@ -4216,7 +4285,15 @@ if __name__ == "__main__":
                 raise Exception(f"unknown flag '{flag}'")
         else:
             url = arg
-            state.newtab(url)
+            data.state.newtab(url)
 
-    data.restore()
-    ui.start(data)
+    try:
+        data.restore()
+        ui.setup(data)
+    except Exception as err:
+        import traceback
+
+        print("Error: failed to restore browser state", err)
+        print(traceback.format_exc())
+    
+    ui.mainloop()
