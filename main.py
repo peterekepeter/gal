@@ -471,6 +471,11 @@ class JSContext:
         js.export_function("children_get", self._children_get)
         js.export_function("document_set_title", self.tab.set_title)
         js.export_function("document_get_title", self.tab.get_title)
+        js.export_function("document_get_body", self._document_get_body)
+        js.export_function("createElement", self._create_element)
+        js.export_function("createTextNode", self._create_text_node)
+        js.export_function("appendChild", self._append_child)
+        js.export_function("insertBefore", self._insert_before)
 
     def _innerHTML_set(self, handle, html):
         doc = HTMLParser("<html><body>" + html + "</body></html>").parse()
@@ -494,6 +499,23 @@ class JSContext:
     def _children_get(self, handle):
         parent = self.handle_to_node[handle]
         return [self._get_handle(node) for node in parent.children if isinstance(node, Element)]
+
+    def _document_get_body(self):
+        return self._get_handle(self.tab.get_body())
+
+    def _create_element(self, tag):
+        element = Element(tag, {}, None)
+        return self._get_handle(element)
+
+    def _create_text_node(self, text):
+        node = Text(text, None)
+        return self._get_handle(node)
+
+    def _append_child(self, hparent, hchild):
+        pass
+
+    def _insert_before(self, htarget, htoinsert):
+        pass
 
     def _get_handle(self, elt):
         if elt not in self.node_to_handle:
@@ -1791,6 +1813,8 @@ class GUIBrowserTab:
 
         self.loaded = url.get_str()
         self.loadedpayload = payload
+        if self.js:
+            self.js.dispatch_event("load", self.get_body())
 
     def render(self):
         self.display_list = []
@@ -1953,6 +1977,12 @@ class GUIBrowserTab:
 
     def get_title(self):
         return self.state.get_title()
+
+    def get_body(self):
+        for node in self.nodes.children:
+            if node.tag == "body":
+                return node
+        raise Exception("unreachable, body not found")
 
     def submit_form(self, form):
         while form and form.tag != "form":

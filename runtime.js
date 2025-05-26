@@ -10,6 +10,8 @@
 
     function Node(handle) { this.handle = handle; }
     Node.prototype.getAttribute = function(name) { return py("getAttribute", this.handle, name) }
+    Node.prototype.appendChild = function(child) { py("appendChild", this.handle, child.handle) }
+    Node.prototype.appendChild = function(child) { py("insertBefore", this.handle, child.handle) }
     Node.prototype.addEventListener = function(type, listener) { 
         if (!LISTENERS[this.handle]) LISTENERS[this.handle] = {};
         var dict = LISTENERS[this.handle];
@@ -29,12 +31,16 @@
     Object.defineProperties(Node.prototype, {
         'innerHTML': {  set: function(s) { py("innerHTML_set", this.handle, s.toString()); }  },
         'children': {  get: function() { return py("children_get", this.handle).map(tonode); }  },
+        'onload': {  set: function(fn) { this.addEventListener("load", fn); }}
     })
 
     function Document() {}
     Document.prototype.querySelectorAll = function(s){ return call_python("querySelectorAll", s).map(tonode) }
+    Document.prototype.createElement = function(s){ return tonode(call_python("createElement", s)) }
+    Document.prototype.createTextNode = function(s){ return tonode(call_python("createTextNode", s)) }
     Object.defineProperties(Document.prototype, {
-        'title': {  get: function() { return py("document_get_title")}, set: function(s) { return py("document_set_title", s.toString()); }  }
+        'title': {  get: function() { return py("document_get_title")}, set: function(s) { return py("document_set_title", s.toString()); }  },
+        'body': {  get: function() { return tonode(py("document_get_body")) }  },
     })
 
     function tonode(handle) {
