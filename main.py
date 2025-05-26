@@ -394,6 +394,19 @@ class Element:
             if node.tag == tag:
                 return node
 
+    def append_child(self, child):
+        if child.parent:
+            child.remove()
+        self.children.append(child)
+        child.parent = self
+    
+    def insert_before(self, child):
+        for index, sibling in enumerate(self.parent.children):
+            if sibling == self:
+                self.parent.children.insert(index, child)
+                child.parent = self.parent
+                return
+
 
 def tree_to_list(tree, list):
     list.append(tree)
@@ -512,10 +525,14 @@ class JSContext:
         return self._get_handle(node)
 
     def _append_child(self, hparent, hchild):
-        pass
+        parent = self.handle_to_node[hparent]
+        child = self.handle_to_node[hchild]
+        parent.append_child(child)
 
-    def _insert_before(self, htarget, htoinsert):
-        pass
+    def _insert_before(self, hparent, htoinsert, hreference):
+        target = self.handle_to_node[hreference]
+        toinsert = self.handle_to_node[htoinsert]
+        target.insert_before(toinsert)
 
     def _get_handle(self, elt):
         if elt not in self.node_to_handle:
@@ -1979,10 +1996,7 @@ class GUIBrowserTab:
         return self.state.get_title()
 
     def get_body(self):
-        for node in self.nodes.children:
-            if node.tag == "body":
-                return node
-        raise Exception("unreachable, body not found")
+        return self.nodes.body
 
     def submit_form(self, form):
         while form and form.tag != "form":

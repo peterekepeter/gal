@@ -17,9 +17,10 @@ document.body.onload = function () {
 
     // add the newly created element and its content into the DOM
     const currentDiv = document.querySelectorAll(".target")[0];
-    document.body.insertBefore(newDiv, currentDiv);
+    const wrapper = document.querySelectorAll(".wrapper")[0]
+    wrapper.insertBefore(newDiv, currentDiv);
 
-    if (document.querySelectorAll(".wrapper").children.length != 2) {
+    if (wrapper.children.length != 2) {
         throw new Error("target should have 2 children")
     }
 

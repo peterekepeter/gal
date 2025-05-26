@@ -11,7 +11,7 @@
     function Node(handle) { this.handle = handle; }
     Node.prototype.getAttribute = function(name) { return py("getAttribute", this.handle, name) }
     Node.prototype.appendChild = function(child) { py("appendChild", this.handle, child.handle) }
-    Node.prototype.appendChild = function(child) { py("insertBefore", this.handle, child.handle) }
+    Node.prototype.insertBefore = function(toinsert, reference) { py("insertBefore", this.handle, toinsert.handle, reference.handle) }
     Node.prototype.addEventListener = function(type, listener) { 
         if (!LISTENERS[this.handle]) LISTENERS[this.handle] = {};
         var dict = LISTENERS[this.handle];
