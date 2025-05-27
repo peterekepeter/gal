@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<body>
+    <div class="first">
+        <span>World!</span>
+        <span>Hello</span>
+    </div>
+    <div class="second"></div>
+</body>
+<script>
+    document.body.onload = function() {
+        const first = document.body.children[0];
+        if (first.children.length != 2) throw new Error("first doesnt have 2 children!");
+        const second = document.body.children[1];
+        const item = first.children[0];
+        const removed = first.removeChild(item);
+        if (first.children.length != 1) throw new Error("item not removed from first!");
+        second.appendChild(removed);
+        if (second.children.length != 1) throw new Error("removed not added to second");
+        document.title = "passed";
+    }
+</script>

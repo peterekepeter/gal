@@ -406,6 +406,11 @@ class Element:
                 self.parent.children.insert(index, child)
                 child.parent = self.parent
                 return
+        
+    def remove(self):
+        if self.parent:
+            self.parent.children.remove(self)
+            self.parent = None
 
 
 def tree_to_list(tree, list):
@@ -489,6 +494,7 @@ class JSContext:
         js.export_function("createTextNode", self._create_text_node)
         js.export_function("appendChild", self._append_child)
         js.export_function("insertBefore", self._insert_before)
+        js.export_function("removeChild", self._remove_child)
 
     def _innerHTML_set(self, handle, html):
         doc = HTMLParser("<html><body>" + html + "</body></html>").parse()
@@ -533,6 +539,10 @@ class JSContext:
         target = self.handle_to_node[hreference]
         toinsert = self.handle_to_node[htoinsert]
         target.insert_before(toinsert)
+    
+    def _remove_child(self, hparent, hchild):
+        self.handle_to_node[hchild].remove()
+
 
     def _get_handle(self, elt):
         if elt not in self.node_to_handle:
