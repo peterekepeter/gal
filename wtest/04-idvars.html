@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<div id="thing">
+    should get replaced...
+</div>
+<script>
+    document.body.onload = function(){
+        if (!thing) throw new Error("thing does not exist");
+        thing.innerHTML = "<strong id=message>Listen!</strong>";
+        if (!message) throw new Error("message not found!");
+        thing.innerHTML = "just text";
+        if ((typeof message) != "undefined") throw new Error("message is still found!");
+        document.title = "passed";
+    }
+</script>

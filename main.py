@@ -476,6 +476,16 @@ class JSContext:
         do_default = self.interp.evaljs(code, type=type, handle=handle)
         return not do_default
 
+    def add_global_name(self, name, elt):
+        handle = self._get_handle(elt)
+        code = "__global_node(dukpy.name, dukpy.handle)"
+        self.interp.evaljs(code, name=name, handle=handle)
+
+    def remove_global_name(self, name, elt):
+        handle = self._get_handle(elt)
+        code = "__global_node_remove(dukpy.name, dukpy.handle)"
+        self.interp.evaljs(code, name=name, handle=handle)
+
     def _load_runtime(self):
         self.run("runtine.js", get_js_runtime_code())
 
@@ -498,8 +508,17 @@ class JSContext:
 
     def _innerHTML_set(self, handle, html):
         doc = HTMLParser("<html><body>" + html + "</body></html>").parse()
-        new_nodes = doc.children[0].children
+        body = doc.children[0]
+        for node in tree_to_list(body, []):
+            if isinstance(node, Element) and node.attributes.get("id"):
+                self.add_global_name(node.attributes.get("id"), node)
+        new_nodes = body.children
         elt = self.handle_to_node[handle]
+        for node in tree_to_list(elt, []):
+            if node == elt: 
+                continue
+            if isinstance(node, Element) and node.attributes.get("id"):
+                self.remove_global_name(node.attributes.get("id"), node)
         elt.children = new_nodes
         for child in elt.children:
             child.parent = elt
@@ -1841,6 +1860,11 @@ class GUIBrowserTab:
         self.loaded = url.get_str()
         self.loadedpayload = payload
         if self.js:
+            for node in nodelist:
+                if isinstance(node, Element):
+                    id = node.attributes.get("id")
+                    if id:
+                        self.js.add_global_name(id, node)
             self.js.dispatch_event("load", self.get_body())
 
     def render(self):
@@ -4284,7 +4308,7 @@ def wtest(browser):
             browser.restorestate()
             end = time.time()
             itempassed = browser.state.get_title() == "passed"
-            if not itempassed: 
+            if not itempassed:
                 failed.append(item)
             ms = int((end-start)*1000)
             print(item, itempassed, ms, "ms")

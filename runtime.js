@@ -52,8 +52,11 @@
         call_python("log", x)
     }
     /** GLOBALS */
-    console = { log:log, error:log }
-    document = new Document()
-    window = { console:console, document:document }
+    var window = new Function('return this;')();
+    window.console = { log:log, error:log };
+    window.document = new Document();
+    window.window = window;
     __dispatch_event = function (handle, type) { return new Node(handle).dispatchEvent(new Event(type)) !== false }
+    __global_node = function (name, handle) { if (typeof window[name] === 'undefined') window[name] = new Node(handle); }
+    __global_node_remove = function (name, handle) { if (typeof window[name] !== 'undefined' && window[name] instanceof Node && window[name].handle === handle) delete window[name]; }
 })();
