@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<div id="outerdiv">
+    <div id="wrapperdiv">
+        <button id="mybtn">ok</button>
+    </div>
+</div>
+<div id="prevent">
+    <a href="https://www.google.com" target="_blank">
+        <span>
+            link is prevented (can only test manually)
+        </span>
+    </a>
+</div>
+
+<script>
+    document.body.onload = function() {
+        outerdiv.addEventListener("click", function(e) {
+            document.title = "failed"
+            throw new Error("should not buble here!")
+        })
+        wrapperdiv.addEventListener("click", function(e) {
+            document.title = "passed"
+            e.stopPropagation()
+        })
+        mybtn.dispatchEvent(new Event("click", { bubbles: true }))
+        prevent.addEventListener('click', function (event) {
+            event.preventDefault();
+        })
+    }
+</script>

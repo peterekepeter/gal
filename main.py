@@ -472,6 +472,8 @@ class JSContext:
 
     def dispatch_event(self, type, elt):
         handle = self.node_to_handle.get(elt, -1)
+        if handle < 0:
+            return
         code = "__dispatch_event(dukpy.handle, dukpy.type)"
         do_default = self.interp.evaljs(code, type=type, handle=handle)
         return not do_default
@@ -505,6 +507,7 @@ class JSContext:
         js.export_function("appendChild", self._append_child)
         js.export_function("insertBefore", self._insert_before)
         js.export_function("removeChild", self._remove_child)
+        js.export_function("parent_get", self._node_parent_get)
 
     def _innerHTML_set(self, handle, html):
         doc = HTMLParser("<html><body>" + html + "</body></html>").parse()
@@ -562,8 +565,15 @@ class JSContext:
     def _remove_child(self, hparent, hchild):
         self.handle_to_node[hchild].remove()
 
+    def _node_parent_get(self, handle):
+        if handle < 0: 
+            return handle
+        node = self.handle_to_node[handle]
+        return self._get_handle(node.parent)
 
     def _get_handle(self, elt):
+        if not elt:
+            return -1
         if elt not in self.node_to_handle:
             handle = len(self.node_to_handle)
             self.node_to_handle[elt] = handle
@@ -1865,7 +1875,7 @@ class GUIBrowserTab:
                     id = node.attributes.get("id")
                     if id:
                         self.js.add_global_name(id, node)
-            self.js.dispatch_event("load", self.get_body())
+            self.dispatch_js_event("load", self.get_body())
 
     def render(self):
         self.display_list = []
@@ -1933,10 +1943,6 @@ class GUIBrowserTab:
         if self.focus:
             self.focus.is_focused = False
             self.focus = None
-        need_render = False
-        form_submit = False
-        form = None
-        travelurl = ""
         node = None
 
         y += self.scroll
@@ -1948,16 +1954,27 @@ class GUIBrowserTab:
                 continue
             node = item.node
             break
+        
+        self.click_node(node, button)
+
+    def click_node(self, node, button):
+        if self.dispatch_js_event('click', node): 
+            return
+        self.handle_default_click(node, button)
+    
+    def handle_default_click(self, node, button):
+        need_render = False
+        form_submit = False
+        form = None
+        travelurl = ""
         while node:
             if isinstance(node, Element):
                 if node.tag == "a" and "href" in node.attributes:
-                    if self.js.dispatch_event('click', node): 
-                        return
                     travelurl = self.resolve_url(node.attributes["href"])
                     self.focus = node
                 elif node.tag == "input":
                     nodetype = node.attributes.get("type")
-                    if self.js.dispatch_event('click', node):
+                    if self.dispatch_js_event('click', node):
                         return
                     if nodetype == "checkbox":
                         if hasattr(node, "ischecked"):
@@ -1969,7 +1986,7 @@ class GUIBrowserTab:
                     need_render = True
                     self.focus = node
                 elif node.tag == "button":
-                    if self.js.dispatch_event('click', node):
+                    if self.dispatch_js_event('click', node):
                         return
                     form_submit = True
                     self.focus = node
@@ -2002,14 +2019,14 @@ class GUIBrowserTab:
 
     def input(self, txt):
         if self.focus:
-            if self.js.dispatch_event("keydown", self.focus):
+            if self.dispatch_js_event("keydown", self.focus):
                 return
             self.focus.attributes["value"] += txt
             self.render()
 
     def pressenter(self):
         if self.focus:
-            if self.js.dispatch_event("keydown", self.focus):
+            if self.dispatch_js_event("keydown", self.focus):
                 return
             self.submit_form(self.focus)
 
@@ -2039,7 +2056,7 @@ class GUIBrowserTab:
         if not form:
             return
         
-        if self.js.dispatch_event("submit", form):
+        if self.dispatch_js_event("submit", form):
             return
 
         inputs = [
@@ -2072,6 +2089,9 @@ class GUIBrowserTab:
         url = self.resolve_url(href)
         self.load(url, readcache=False, payload=body)
         self.state.pushlocation(url, payload=body)
+
+    def dispatch_js_event(self, type, node):
+        return self.js and self.js.dispatch_event(type, node)
 
     def resolve_url(self, urlstr):
         parent = URL(self.state.get_url())
@@ -4289,6 +4309,7 @@ def wtest(browser):
     import os
     import time
 
+    bail = True
     totalstart = time.time()
     wdata = BrowserData()
     wdata.makeprivate()
@@ -4314,9 +4335,12 @@ def wtest(browser):
             print(item, itempassed, ms, "ms")
         except Exception as err:
             import traceback
-            print("Error: excetion during wtest", item, err)
+            print("Error: exception during wtest", item, err)
             print(traceback.format_exc())
             raised.append(err)
+        if bail and (failed or raised):
+            raise Exception("pass condition not met", failed)
+
 
     browser.state.closetab()
     totalend = time.time()
