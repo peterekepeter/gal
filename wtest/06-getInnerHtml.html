@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<body>
+    <div class="wrapper"><b>Test!</b></div>
+</body>
+
+<script>
+    document.body.onload = function() {
+        const wrapper = document.querySelectorAll('.wrapper')[0];
+        if (wrapper.innerHTML !== '<b>Test!</b>')
+            throw new Error("innerHTML not as expected");
+        if (wrapper.outerHTML !== '<div class="wrapper"><b>Test!</b></div>')
+            throw new Error("outerHTML not as expected");
+        document.title = "passed";
+    }
+</script>

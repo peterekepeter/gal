@@ -51,7 +51,8 @@
         return event.do_default;
     }
     Object.defineProperties(Node.prototype, {
-        'innerHTML': {  set: function(s) { py("innerHTML_set", this.handle, s.toString()); }  },
+        'innerHTML': {  get: function() { return py("innerHTML_get", this.handle); }, set: function(s) { py("innerHTML_set", this.handle, s.toString()); }  },
+        'outerHTML': {  get: function() { return py("outerHTML_get", this.handle);}  },
         'children': {  get: function() { return py("children_get", this.handle).map(tonode); }  },
         'onload': {  set: function(fn) { this.addEventListener("load", fn); }},
         'parent': {  get: function() { return tonode(py("parent_get", this.handle)) }  },

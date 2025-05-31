@@ -445,6 +445,42 @@ def print_tree(node, indent=0):
         print_tree(child, indent + 2)
 
 
+def format_tree_HTML(node):
+    parts = []
+    if isinstance(node, list):
+        for item in node:
+            collect_HTML_parts(item, parts)
+    else:
+        collect_HTML_parts(node, parts)
+    return "".join(parts)
+
+
+def collect_HTML_parts(node, parts):
+    if isinstance(node, Element):
+        parts.append("<")
+        parts.append(node.tag)
+        for key in node.attributes:
+            value = node.attributes[key]
+            parts.append(" ")
+            parts.append(key)
+            if value:
+                parts.append('="')
+                # TODO this should be escaped
+                parts.append(value) 
+                parts.append('"')
+        parts.append(">")
+        for child in node.children:
+            collect_HTML_parts(child, parts)
+        parts.append("</")
+        parts.append(node.tag)
+        parts.append(">")
+    elif isinstance(node, Text):
+        parts.append(node.text)
+    else:
+        raise Exception("collect_HTML_parts node type not handled")
+    return parts
+
+
 class JSContext:
     def __init__(self, tab):
         self.interp = None
@@ -498,6 +534,8 @@ class JSContext:
         js.export_function("querySelectorAll", self._querySelectorAll)
         js.export_function("getAttribute", self._getAttribute)
         js.export_function("innerHTML_set", self._innerHTML_set)
+        js.export_function("innerHTML_get", self._innerHTML_get)
+        js.export_function("outerHTML_get", self._outerHTML_get)
         js.export_function("children_get", self._children_get)
         js.export_function("document_set_title", self.tab.set_title)
         js.export_function("document_get_title", self.tab.get_title)
@@ -508,6 +546,14 @@ class JSContext:
         js.export_function("insertBefore", self._insert_before)
         js.export_function("removeChild", self._remove_child)
         js.export_function("parent_get", self._node_parent_get)
+
+    def _outerHTML_get(self, handle):
+        elt = self.handle_to_node[handle]
+        return format_tree_HTML(elt)
+
+    def _innerHTML_get(self, handle):
+        elt = self.handle_to_node[handle]
+        return format_tree_HTML(elt.children)
 
     def _innerHTML_set(self, handle, html):
         doc = HTMLParser("<html><body>" + html + "</body></html>").parse()
@@ -525,7 +571,6 @@ class JSContext:
         elt.children = new_nodes
         for child in elt.children:
             child.parent = elt
-
 
     def _querySelectorAll(self, selector):
         nodes = query_selector_all(selector, self.tab.nodes)
