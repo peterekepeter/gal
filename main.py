@@ -551,6 +551,7 @@ class JSContext:
         js.export_function("insertBefore", self._insert_before)
         js.export_function("removeChild", self._remove_child)
         js.export_function("parent_get", self._node_parent_get)
+        js.export_function("getComputedStyle", self._getComputedStyle)
 
     def _outerHTML_get(self, handle):
         elt = self.handle_to_node[handle]
@@ -616,17 +617,26 @@ class JSContext:
     def _insert_before(self, hparent, htoinsert, hreference):
         target = self.handle_to_node[hreference]
         toinsert = self.handle_to_node[htoinsert]
-        self.tab.load_node(toinsert)
+        if isinstance(toinsert, Element):
+            self.tab.load_node(toinsert)
         target.insert_before(toinsert)
     
     def _remove_child(self, hparent, hchild):
-        self.handle_to_node[hchild].remove()
+        child = self.handle_to_node[hchild]
+        child.remove()
+        if isinstance(child, Element):
+            self.tab.unload_node(child)
 
     def _node_parent_get(self, handle):
         if handle < 0: 
             return handle
         node = self.handle_to_node[handle]
         return self._get_handle(node.parent)
+    
+    def _getComputedStyle(self, handle):
+        self.tab.render()
+        node = self.handle_to_node[handle]
+        return node.style
 
     def _get_handle(self, elt):
         if not elt:
@@ -1935,9 +1945,9 @@ class GUIBrowserTab:
             style_url = URL(link, parent=self.url)
             try:
                 body = style_url.request()
+                self.rules.extend(CSSParser(body).parse())
             except Exception as e:
                 print("failed to load stylesheet", style_url, e)
-            self.rules.extend(CSSParser(body).parse())
 
     def load_script(self, node):
         src = node.attributes.get("src")
@@ -1952,6 +1962,23 @@ class GUIBrowserTab:
             self.evaljs(script_url, code)
         except Exception as e:
             print("failed to load script", self.url, script_url, e)
+
+    def unload_node(self, node):
+        if node.tag == "link":
+            self.unload_link(node)
+
+    def unload_link(self, node):
+        if (
+            node.attributes.get("rel") == "stylesheet"
+            and "href" in node.attributes
+        ):
+            # inefficient implementation, rebuild rules by reloading all stylesheets
+            self.rules = get_initial_styling_rules()
+            nodelist = tree_to_list(self.nodes, [])
+            for node in nodelist:
+                if isinstance(node, Element) and node.tag == "link":
+                    self.load_link(node)
+        
 
     def render(self):
         self.display_list = []
@@ -2615,7 +2642,7 @@ class BlockLayout:
             size = int(16 * 0.75)
         else:
             try:
-                size = int(float(size_str[:-2]) * 0.75)
+                size = int(parse_size(size_str) * 0.75)
             except Exception as e:
                 print("Failed to parse size", size_str, e)
                 size = int(16 * 0.75)
@@ -2821,7 +2848,7 @@ class TextLayout:
             size = int(16 * 0.75)
         else:
             try:
-                size = int(float(size_str[:-2]) * 0.75)
+                size = int(parse_size(size_str) * 0.75)
             except Exception as e:
                 print("Failed to parse size", size_str, e)
                 size = int(16 * 0.75)
@@ -2908,7 +2935,7 @@ class InputLayout:
             size = int(16 * 0.75)
         else:
             try:
-                size = int(float(size_str[:-2]) * 0.75)
+                size = int(parse_size(size_str) * 0.75)
             except Exception as e:
                 print("Failed to parse size", size_str, e)
                 size = int(16 * 0.75)
@@ -3855,7 +3882,7 @@ def style(node, rules, depth=0):
         else:
             parent_font_size = INHERITED_PROPERTIES["font-size"]
         node_pct = float(node.style["font-size"][:-1]) / 100
-        parent_px = float(parent_font_size[:-2])
+        parent_px = parse_size(parent_font_size[:-2])
         node.style["font-size"] = str(node_pct * parent_px) + "px"
 
     for child in node.children:
@@ -3876,9 +3903,9 @@ def parse_size(str):
         return float(str[:-2])
     if str.endswith("%"):
         return float(str[:-1]) / 100.0 * 16.0  # incorrect
-    if str.endswith("em"):
-        return float(str[:-2]) * 16.0  # incorrect
     if str.endswith("rem"):
+        return float(str[:-3]) * 16.0  # incorrect
+    if str.endswith("em"):
         return float(str[:-2]) * 16.0  # incorrect
     else:
         return 16.0  # unhandle dformat
@@ -4115,6 +4142,9 @@ def test_CSS_parse():
     assert results[0][1]["background-color"] == "#ffffff"
 
     results = parse("div { color: black !important; }")
+    assert results[0][1]["color"] == "black"
+
+    results = parse("div { color: #000!important; }")
     assert results[0][1]["color"] == "black"
 
     results = parse("h1 { border: 1px solid black; }")

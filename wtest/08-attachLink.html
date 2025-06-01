@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<body><div class="wrapper">Should be visible and green!</div></body>
+<script>
+    document.body.onload = function () {
+        var wrapper = document.querySelectorAll('.wrapper')[0]
+        var first = document.createElement('link')
+        first.setAttribute("rel", "stylesheet")
+        first.setAttribute("href", "data:text/css,body .wrapper{display:none !important}")
+        document.body.appendChild(first);
+        var value = window.getComputedStyle(wrapper).display
+        if (value != 'none') {
+            throw new Error("expected display: none found: " + value)
+        }
+        var second = document.createElement('link')
+        second.setAttribute("rel", "stylesheet")
+        second.setAttribute("href", "data:text/css,.wrapper{display:inline;color:green}")
+        document.body.appendChild(second);
+        document.body.removeChild(first);
+        var value = window.getComputedStyle(wrapper).display
+        if (value != 'inline') {
+            throw new Error("expected display: inline found: " + value)
+        }
+        document.title = 'passed'
+    }
+</script>

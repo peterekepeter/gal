@@ -74,6 +74,7 @@
     window.console = { log:log, warn:log, error:log, info:log, debug:log };
     window.document = new Document();
     window.window = window;
+    window.getComputedStyle = function(node) { return py("getComputedStyle", node.handle) }
     __dispatch_event = function (handle, type) { var event=new Event(type); event.isTrusted=true; event.bubbles=true; return new Node(handle).dispatchEvent(event) !== false }
     __global_node = function (name, handle) { if (typeof window[name] === 'undefined') window[name] = new Node(handle); }
     __global_node_remove = function (name, handle) { if (typeof window[name] !== 'undefined' && window[name] instanceof Node && window[name].handle === handle) delete window[name]; }
