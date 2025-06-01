@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<body></body>
+<script>
+    document.body.onload = function () {
+        var node = document.createElement('script')
+        var src = 'data:application/javascript,document.title="passed"';
+        node.setAttribute('src', src);
+        document.body.appendChild(node);
+    }
+</script>

@@ -537,6 +537,7 @@ class JSContext:
         js.export_function("log", print)
         js.export_function("querySelectorAll", self._querySelectorAll)
         js.export_function("getAttribute", self._getAttribute)
+        js.export_function("setAttribute", self._setAttribute)
         js.export_function("innerHTML_set", self._innerHTML_set)
         js.export_function("innerHTML_get", self._innerHTML_get)
         js.export_function("outerHTML_get", self._outerHTML_get)
@@ -585,6 +586,10 @@ class JSContext:
         elt = self.handle_to_node[handle]
         attr = elt.attributes.get(attr, None)
         return attr if attr else ""
+    
+    def _setAttribute(self, handle, attr, value):
+        elt = self.handle_to_node[handle]
+        elt.attributes[attr] = value
 
     def _children_get(self, handle):
         parent = self.handle_to_node[handle]
@@ -604,11 +609,14 @@ class JSContext:
     def _append_child(self, hparent, hchild):
         parent = self.handle_to_node[hparent]
         child = self.handle_to_node[hchild]
+        if isinstance(child, Element):
+            self.tab.load_node(child)
         parent.append_child(child)
 
     def _insert_before(self, hparent, htoinsert, hreference):
         target = self.handle_to_node[hreference]
         toinsert = self.handle_to_node[htoinsert]
+        self.tab.load_node(toinsert)
         target.insert_before(toinsert)
     
     def _remove_child(self, hparent, hchild):
@@ -1804,6 +1812,7 @@ class GUIBrowserTab:
         self.rules = []
         self.modal = None
         self.js = None
+        self.url = None
 
     def browse(self, url):
         self.state.browse(url)
@@ -1854,6 +1863,8 @@ class GUIBrowserTab:
             print("Error: failed to parse URL", err)
             print(traceback.format_exc())
             url = URL("about:blank")
+        finally:
+            self.url = url
 
         if url.scheme == "about":  # handle meta pages
             if url.path == "blank":
@@ -1869,44 +1880,15 @@ class GUIBrowserTab:
 
         self.nodes = parser_class(result).parse()
 
-        # resolve CSS
         rules = get_initial_styling_rules()
+        self.rules = rules
+
         nodelist = tree_to_list(self.nodes, [])
         for node in nodelist:
             if isinstance(node, Element):
                 eval_visited(node, url, self.browser.history.get_visited_set())
-                if node.tag == "link":
-                    if (
-                        node.attributes.get("rel") == "stylesheet"
-                        and "href" in node.attributes
-                    ):
-                        link = node.attributes["href"]
-                        style_url = URL(link, parent=url)
-                        try:
-                            body = style_url.request()
-                        except Exception as e:
-                            print("failed to load stylesheet", style_url, e)
-                            continue
-                        rules.extend(CSSParser(body).parse())
-                elif node.tag == "style":
-                    rules.extend(CSSParser(node.get_text()).parse())
-                elif node.tag == "title":
-                    self.set_title(node.get_text())
-                elif node.tag == "script" and self.is_js_enabled():
-                    src = node.attributes.get("src")
-                    script_url = src
-                    try:
-                        if src:
-                            script_url = URL(src, parent=url)
-                            code = script_url.request()
-                        else:
-                            script_url = url
-                            code = node.get_text()
-                            self.evaljs(script_url, code)
-                    except Exception as e:
-                        print("failed to load script", url, script_url, e)
-
-        self.rules = rules
+                self.load_node(node)
+        
 
         # style(self.nodes, sorted(rules, key=cascade_priority))
         # print_tree(self.nodes)
@@ -1933,6 +1915,43 @@ class GUIBrowserTab:
                     if id:
                         self.js.add_global_name(id, node)
             self.dispatch_js_event("load", self.get_body())
+
+    def load_node(self, node):
+        if node.tag == "link":
+            self.load_link(node)
+        elif node.tag == "style":
+            self.rules.extend(CSSParser(node.get_text()).parse())
+        elif node.tag == "title":
+            self.set_title(node.get_text())
+        elif node.tag == "script" and self.is_js_enabled():
+            self.load_script(node)
+
+    def load_link(self, node):
+        if (
+            node.attributes.get("rel") == "stylesheet"
+            and "href" in node.attributes
+        ):
+            link = node.attributes["href"]
+            style_url = URL(link, parent=self.url)
+            try:
+                body = style_url.request()
+            except Exception as e:
+                print("failed to load stylesheet", style_url, e)
+            self.rules.extend(CSSParser(body).parse())
+
+    def load_script(self, node):
+        src = node.attributes.get("src")
+        script_url = src
+        try:
+            if src:
+                script_url = URL(src, parent=self.url)
+                code = script_url.request()
+            else:
+                script_url = f'{self.url}'
+                code = node.get_text()
+            self.evaljs(script_url, code)
+        except Exception as e:
+            print("failed to load script", self.url, script_url, e)
 
     def render(self):
         self.display_list = []

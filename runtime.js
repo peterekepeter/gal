@@ -14,6 +14,7 @@
 
     function Node(handle) { this.handle = handle; }
     Node.prototype.getAttribute = function(name) { return py("getAttribute", this.handle, name) }
+    Node.prototype.setAttribute = function(name, value) { py("setAttribute", this.handle, name, value); }
     Node.prototype.appendChild = function(child) { py("appendChild", this.handle, child.handle) }
     Node.prototype.insertBefore = function(toinsert, reference) { py("insertBefore", this.handle, toinsert.handle, reference.handle) }
     Node.prototype.removeChild = function(toremove) { py("removeChild", this.handle, toremove.handle); return toremove; }
