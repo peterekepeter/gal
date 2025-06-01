@@ -482,25 +482,29 @@ def collect_HTML_parts(node, parts):
 
 
 class JSContext:
+    def is_feature_avaiable():
+        try:
+            import dukpy
+            assert dukpy.evaljs("2 + 2") == 4
+            return True
+        except Exception as e:
+            print("JavaScript not avaiable, please install dukjs to enable:", e)
+            return False
+
     def __init__(self, tab):
+        import dukpy
+
         self.interp = None
         self.tab = tab
         self.node_to_handle = {}
         self.handle_to_node = {}
-        try:
-            import dukpy
-            self.interp = dukpy.JSInterpreter()
-        except Exception as e:
-            print("JS not avaiable, please install dukjs:", e)
-        if self.interp:
-            self._register_functions()
-            self._load_runtime()
+        self.interp = dukpy.JSInterpreter()
+        self._register_functions()
+        self._load_runtime()
 
     def run(self, path, code):
-        if not self.interp: 
-            return
-
         import dukpy
+
         try:
             return self.interp.evaljs(code)
         except dukpy.JSRuntimeError as e:
@@ -707,8 +711,9 @@ class NoDiskAccessPaths:
 class BrowserData:
     def __init__(self):
         self.is_private = False
+        self.use_scripting = True
         self._custom_dir = None
-    
+
     def restore(self):
         global http_cache_dir
 
@@ -730,6 +735,11 @@ class BrowserData:
     def makeprivate(self):
         self.is_private = True
 
+    def disablejs(self):
+        self.use_scripting = False
+
+    def is_js_enabled(self):
+        return self.use_scripting is True
 
 class BrowserState:
     def __init__(self, profile_dir):
@@ -1071,6 +1081,7 @@ class GUIBrowser:
         self.focus = None
 
     def setup(self, data):
+        self.data = data
         self.state: BrowserState = data.state
         self.history: BrowserHistory = data.history
         self.bookmarks: BrowserBookmarks = data.bookmarks
@@ -1339,6 +1350,9 @@ class GUIBrowser:
         self.chrome.resize(self.width, self.height)
         self.resize_active_tab()
         self.draw()
+
+    def is_js_enabled(self):
+        return self.data.is_js_enabled()
 
 
 class GUIChrome:
@@ -1878,7 +1892,7 @@ class GUIBrowserTab:
                     rules.extend(CSSParser(node.get_text()).parse())
                 elif node.tag == "title":
                     self.set_title(node.get_text())
-                elif node.tag == "script":
+                elif node.tag == "script" and self.is_js_enabled():
                     src = node.attributes.get("src")
                     script_url = src
                     try:
@@ -1888,9 +1902,7 @@ class GUIBrowserTab:
                         else:
                             script_url = url
                             code = node.get_text()
-                        if not self.js:
-                            self.js = JSContext(self)
-                        self.js.run(script_url, code)
+                            self.evaljs(script_url, code)
                     except Exception as e:
                         print("failed to load script", url, script_url, e)
 
@@ -2134,6 +2146,22 @@ class GUIBrowserTab:
         url = self.resolve_url(href)
         self.load(url, readcache=False, payload=body)
         self.state.pushlocation(url, payload=body)
+
+    def is_js_enabled(self):
+        if self.js:
+            return True
+        if self.js is False:
+            return False
+        if self.browser.is_js_enabled():
+            if JSContext.is_feature_avaiable():
+                return True
+        self.js = False
+        return False
+
+    def evaljs(self, url, code):
+        if not self.js and self.is_js_enabled():
+            self.js = JSContext(self)
+        self.js.run(url, code)
 
     def dispatch_js_event(self, type, node):
         return self.js and self.js.dispatch_event(type, node)
@@ -4411,7 +4439,9 @@ if __name__ == "__main__":
         elif arg.startswith("-"):
             flag = arg
             if "--private" == flag:
-                data.makeprivate()  
+                data.makeprivate()
+            elif "--disable-javascript" == flag or "--nojs" == flag:
+                data.disablejs()
             elif "--gui" == flag:
                 ui = GUIBrowser()
             elif "--cli" == flag:
@@ -4442,5 +4472,5 @@ if __name__ == "__main__":
 
         print("Error: failed to restore browser state", err)
         print(traceback.format_exc())
-    
+
     ui.mainloop()
