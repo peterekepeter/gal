@@ -1,10 +1,17 @@
 import socket
+import random
 
 data_dir = "./data"
 PORT = 8000
+SESSIONS = {}
+LOGINS = {
+    "crashoverride": "0cool",
+    "cerealkiller": "emmanuel",
+}
 
 
 def main():
+    SESSIONS = data_restore_sesssions()
     s = socket.socket(
         family=socket.AF_INET, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP
     )
@@ -36,8 +43,15 @@ def handle_connection(conx):
     else:
         body = None
 
+    if "cookie" in headers:
+        token = headers["cookie"][len("token=") :]
+    else:
+        token = str(random.random())[2:]  # not secure
+
+    session = SESSIONS.setdefault(token, {})
+
     try:
-        status, body = do_request(method, url, headers, body)
+        status, body = do_request(session, method, url, headers, body)
     except Exception as e:
         import traceback
 
@@ -49,13 +63,16 @@ def handle_connection(conx):
     print(status, method, url)
 
     response = "HTTP/1.0 {}\r\n".format(status)
+    if "cookie" not in headers:
+        template = "Set-Cookie: token={}\r\n"
+        response += template.format(token)
     response += "Content-Length: {}\r\n".format(len(body.encode("utf8")))
     response += "\r\n" + body
     conx.send(response.encode("utf8"))
     conx.close()
 
 
-def do_request(method, url, headers, body):
+def do_request(session, method, url, headers, body):
     import urllib.parse
 
     parsed_url = urllib.parse.urlparse(url)
@@ -64,10 +81,15 @@ def do_request(method, url, headers, body):
 
     if method == "GET" and path == "/":
         flt = get_query_single_value(query, "q", "")
-        return "200 OK", show_comments(flt=flt)
+        return "200 OK", show_comments(session, flt=flt)
+    elif method == "POST" and url == "/":
+        params = form_decode(body)
+        return do_login(session, params)
+    elif method == "GET" and url == "/login":
+        return "200 OK", login_form(session)
     elif method == "POST" and path == "/add":
         params = form_decode(body)
-        return "200 OK", add_entry(params)
+        return "200 OK", add_entry(session, params)
     else:
         return "404 Not Found", not_found(url, method)
 
@@ -94,25 +116,28 @@ def form_decode(body):
     return params
 
 
-def add_entry(params):
+def add_entry(session, params):
+    if "user" not in session:
+        return
     if "guest" in params:
         message = params["guest"]
-        data_append(message)
+        data_append(session["user"], message)
 
-    return show_comments()
+    return show_comments(session)
 
 
 def data_get_path():
     return data_dir + "/guestbook.txt"
 
 
-def data_append(message):
+def data_append(username, message):
     import os
 
     message = message.replace("\n", " ").strip()
     os.makedirs(data_dir, exist_ok=True)
     with open(data_get_path(), "a") as f:
-        f.write(message + "\n")
+        # not safe encoding
+        f.write(username + ":" + message + "\n")
 
 
 def data_get_all():
@@ -125,18 +150,48 @@ def data_get_all():
     return []
 
 
+def data_get_sessions_path():
+    return data_dir + "/sessions.txt"
+
+
+def data_save_sessions():
+    import json
+
+    with open(data_get_sessions_path(), "w") as f:
+        json.dump(SESSIONS, f, indent=1)
+
+
+def data_restore_sesssions():
+    import json
+
+    global SESSIONS
+
+    with open(data_get_sessions_path()) as f:
+        SESSIONS = json.load(f)
+
+
 def not_found(url, method):
     out = "<!doctype html>"
     out += "<h1>{} {} not found!</h1>".format(method, url)
     return out
 
 
-def show_comments(flt=""):
+def show_comments(session, flt=""):
     import html
 
     print(repr(flt))
     out = "<!doctype html>\n"
     out += "<title>Guestbook</title>\n"
+
+    if "user" in session:
+        out += "<h1>Hello, " + session["user"] + "</h1>"
+        out += "<form action=add method=post>"
+        out += "<p><input name=guest></p>"
+        out += "<p><button>Sign the book!</button></p>"
+        out += "</form>"
+    else:
+        out += "<a href=/login>Sign in to write in the guest book</a>"
+
     # unsafe
     out += f'<form action=/ method=get><input name=q value="{html.escape(flt)}"><button>Search!</button></form>\n'
     out += "<h2>Guestbook</h2>"
@@ -144,12 +199,44 @@ def show_comments(flt=""):
     out += f"<p>{len(entries)} post(s)</p>"
     for entry in entries:
         if flt in entry:
-            out += "<p>" + entry + "</p>\n"
+            print("ENTRY", entry)
+            parts = entry.split(":", 1)
+            if len(parts) == 2:
+                who = parts[0]
+                entry = parts[1]
+            else:
+                who = "unknown"
+            print("PARTS", parts)
+            out += "<p>" + entry
+            out += "<i> by " + who + "</i></p>"
     out += "<form action=add method=post>\n"
     out += "<p><input name=guest></p>\n"
     out += "<p><button>Sign the book!</button></p>\n"
     out += "</form>\n"
     return out
+
+
+def login_form(session):
+    body = "<!doctype html>"
+    body += "<form action=/ method=post>"
+    body += "<p>Username: <input name=username></p>"
+    body += "<p>Password: <input name=password type=password></p>"
+    body += "<p><button>Log in</button></p>"
+    body += "</form>"
+    return body
+
+
+def do_login(session, params):
+    username = params.get("username")
+    password = params.get("password")
+    if username in LOGINS and LOGINS[username] == password:
+        session["user"] = username
+        data_save_sessions()
+        return "200 OK", show_comments(session)
+    else:
+        out = "<!doctype html>"
+        out += "<h1>Invalid password for {}</h1>".format(username)
+        return "401 Unauthorized", out
 
 
 if __name__ == "__main__":
