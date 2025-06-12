@@ -11,7 +11,7 @@ LOGINS = {
 
 
 def main():
-    SESSIONS = data_restore_sesssions()
+    data_restore_sesssions()
     s = socket.socket(
         family=socket.AF_INET, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP
     )
@@ -97,7 +97,6 @@ def do_request(session, method, url, headers, body):
 def get_query_single_value(query, key, default):
     if key not in query:
         return default
-    print(query)
     list = query.get(key)
     if len(list) == 0:
         return default
@@ -199,14 +198,12 @@ def show_comments(session, flt=""):
     out += f"<p>{len(entries)} post(s)</p>"
     for entry in entries:
         if flt in entry:
-            print("ENTRY", entry)
             parts = entry.split(":", 1)
             if len(parts) == 2:
                 who = parts[0]
                 entry = parts[1]
             else:
                 who = "unknown"
-            print("PARTS", parts)
             out += "<p>" + entry
             out += "<i> by " + who + "</i></p>"
     out += "<form action=add method=post>\n"
