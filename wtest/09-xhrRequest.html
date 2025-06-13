@@ -1,0 +1,7 @@
+<!DOCTYPE html>
+<script>
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "data:text/plain,passed", false);
+    xhr.send();
+    document.title = xhr.responseText;
+</script>

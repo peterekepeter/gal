@@ -570,6 +570,7 @@ class JSContext:
         js.export_function("removeChild", self._remove_child)
         js.export_function("parent_get", self._node_parent_get)
         js.export_function("getComputedStyle", self._getComputedStyle)
+        js.export_function("XHR_send", self._xhr_send)
 
     def _outerHTML_get(self, handle):
         elt = self.handle_to_node[handle]
@@ -655,6 +656,12 @@ class JSContext:
         self.tab.render()
         node = self.handle_to_node[handle]
         return node.style
+
+    def _xhr_send(self, method, url, body):
+        url = URL(url, parent=self.tab.url)
+        return url.request(payload=body)
+
+
 
     def _get_handle(self, elt):
         if not elt:

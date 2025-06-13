@@ -68,6 +68,16 @@
         'body': {  get: function() { return tonode(py("document_get_body")) }  },
     })
 
+    window.XMLHttpRequest = function XMLHttpRequest(){}
+    XMLHttpRequest.prototype.open = function(method,url,is_async){
+        if (is_async) throw Error("Async XHR not supported!");
+        this.method = method;
+        this.url = url;
+    }
+    XMLHttpRequest.prototype.send = function(body) {
+        this.responseText = py("XHR_send", this.method, this.url, body);
+    }
+
     function tonode(handle) { if (handle >= 0) return new Node(handle); return undefined; }
     function log(){ call_python("log", arr(arguments).join(" ")) }
     function arr(arraylike){ var a=[]; for(var i=0;i<arraylike.length;i+=1) a.push(arraylike[i]); return a }
