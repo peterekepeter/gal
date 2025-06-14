@@ -15,6 +15,8 @@ class URL:
         url = url.replace("\\", "/")
         self.fragment = ""
         self.search = ""
+        self.host = "" # TODO not sure if safe
+        self.port = 0
         if parent:
             self.scheme = parent.scheme
             self.path = parent.path
@@ -92,6 +94,9 @@ class URL:
             self.port = 80
         elif self.scheme == "https":
             self.port = 443
+
+    def origin(self):
+        return self.scheme + "://" + self.host + ":" + str(self.port)
 
     def request(self, max_redirect=3, readcache=True, payload=None, cookies=None):
         if self.scheme == "about":
@@ -596,6 +601,7 @@ class JSContext:
         elt.children = new_nodes
         for child in elt.children:
             child.parent = elt
+        self.tab.render()
 
     def _querySelectorAll(self, selector):
         nodes = query_selector_all(selector, self.tab.nodes)
@@ -658,10 +664,14 @@ class JSContext:
         return node.style
 
     def _xhr_send(self, method, url, body):
-        url = URL(url, parent=self.tab.url)
-        return url.request(payload=body)
-
-
+        parent_url = self.tab.url
+        url = URL(url, parent=parent_url)
+        if url.scheme != "data" and url.origin() != parent_url.origin():
+            # always allow data: protocol (data hardcoded into url)
+            # otherse compare origin
+            # TODO: i think origin handling should be more standardized
+            raise Exception("Cross-origin XHR request not allowed")
+        return url.request(payload=body, cookies=self.tab.browser.cookies)
 
     def _get_handle(self, elt):
         if not elt:
@@ -4336,6 +4346,7 @@ def test_URL():
 
     url = URL("C:\\Users\\someone\\index.html")
     assert url.scheme == "file"
+    assert url.host == ""
     assert url.path == "C:/Users/someone/index.html"
 
     url = URL("/home/username/file.html")
@@ -4388,6 +4399,7 @@ def test_URL():
     assert url.scheme == "http"
     assert url.port == 8000
     assert url.path == "/"
+    assert url.origin() == "http://localhost:8000"
 
 
 def test_BrowserState():

@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<body>
+    <div class="content"></div>
+</body>
+<script>
+    document.body.onload = function(){
+        var xhr = new XMLHttpRequest();
+        xhr.open("GET", "http://localhost:8000", false);
+        try {
+            xhr.send(); // should trigger exception
+            var target = document.querySelectorAll('.content')[0];
+            target.innerHTML = xhr.responseText;
+        }
+        catch (err) {
+            document.title = "passed"
+        }
+    }
+</script>
