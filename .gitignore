@@ -2,3 +2,4 @@
 .profile
 .gal
 .venv
+__pycache__

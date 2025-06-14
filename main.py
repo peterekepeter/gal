@@ -4508,7 +4508,7 @@ def test_BrowserBookmarks():
     bm.toggle("https://example.com", "Example")
     assert bm.get_count() == 0
 
-def wtest(browser):
+def integration_test(browser, testsuite):
     import os
     import time
 
@@ -4518,17 +4518,36 @@ def wtest(browser):
     wdata.makeprivate()
     wdata.restore()
     browser.setup(wdata)
-    wtestdir = URL("wtest", parent=URL(__file__)).path
+    wtestdir = URL(testsuite, parent=URL(__file__)).path
     browser.state.newtab("about:blank")
     failed = []
     raised = []
     items = os.listdir(wtestdir)
     reset = "\x1b[30m"
+    procenv = None
+    portstr = None
     for item in items:
         try:
+            proc = None
             start = time.time()
             itempath = wtestdir + "/" + item
-            browser.state.replacelocation(itempath, None)
+            browsepath = itempath
+
+            if item.endswith(".py"):
+                import subprocess
+                import sys
+
+                if not portstr:
+                    portstr = "9099"
+
+                if not procenv:
+                    procenv = os.environ.copy()
+                    procenv["DEFAULT_HTTP_PORT"] = portstr
+                    procenv["PYTHONPATH"] = os.path.dirname(__file__)
+                proc = subprocess.Popen([sys.executable, itempath], env=procenv)
+                browsepath = "http://localhost:" + portstr
+
+            browser.state.replacelocation(browsepath, None)
             browser.restorestate()
             end = time.time()
             itempassed = browser.state.get_title() == "passed"
@@ -4541,9 +4560,11 @@ def wtest(browser):
             print("Error: exception during wtest", item, err)
             print(traceback.format_exc())
             raised.append(err)
+        finally:
+            if proc:
+                proc.kill()
         if bail and (failed or raised):
             raise Exception("pass condition not met", failed)
-
 
     browser.state.closetab()
     totalend = time.time()
@@ -4552,8 +4573,7 @@ def wtest(browser):
         print("\x1b[31mwtest failed", failed, "test(s)", totalms, "ms", reset)
         raise raised[0] if len(raised) > 0 else Exception("wtest condition not met")
     else:
-        print("\x1b[32mwtest all tests passed!", totalms, "ms", reset)
-
+        print("\x1b[32m{} all tests passed!".format(testsuite), totalms, "ms", reset)
 
 if __name__ == "__main__":
     import sys
@@ -4579,7 +4599,9 @@ if __name__ == "__main__":
             elif "--test" == flag:
                 test()
             elif "--wtest" == flag:
-                wtest(ui)
+                integration_test(ui, "wtest")
+            elif "--wstest" == flag:
+                integration_test(ui, "wstest")
             elif "--version" == flag:
                 print("1.0.0")
             elif "--help" == flag:
