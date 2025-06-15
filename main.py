@@ -576,6 +576,7 @@ class JSContext:
         js.export_function("parent_get", self._node_parent_get)
         js.export_function("getComputedStyle", self._getComputedStyle)
         js.export_function("XHR_send", self._xhr_send)
+        js.export_function("location_set", self._location_set)
 
     def _outerHTML_get(self, handle):
         elt = self.handle_to_node[handle]
@@ -672,6 +673,11 @@ class JSContext:
             # TODO: i think origin handling should be more standardized
             raise Exception("Cross-origin XHR request not allowed")
         return url.request(payload=body, cookies=self.tab.browser.cookies)
+
+    def _location_set(self, value):
+        travelurl = self.tab.resolve_url(value)
+        self.tab.state.pushlocation(travelurl)
+        self.tab.restorestate()
 
     def _get_handle(self, elt):
         if not elt:
@@ -4534,8 +4540,11 @@ def integration_test(browser, testsuite):
             browsepath = itempath
 
             if item.endswith(".py"):
+                global http_cache
                 import subprocess
                 import sys
+
+                http_cache = {}  # wipe http cache
 
                 if not portstr:
                     portstr = "9099"
@@ -4546,6 +4555,7 @@ def integration_test(browser, testsuite):
                     procenv["PYTHONPATH"] = os.path.dirname(__file__)
                 proc = subprocess.Popen([sys.executable, itempath], env=procenv)
                 browsepath = "http://localhost:" + portstr
+                time.sleep(0.1) # wait for process to open port
 
             browser.state.replacelocation(browsepath, None)
             browser.restorestate()

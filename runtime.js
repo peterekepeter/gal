@@ -3,6 +3,10 @@
     /** @type {Record<number,Record<string,function[]>>} */
     var LISTENERS = {};
     var py = call_python;
+    
+    Object.defineProperties(window, {
+        'location': { set: function(value) { py("location_set", value); } }
+    })
 
     window.Event = function Event(type,options) { options=options||{}; this.type = type; this.do_default = true; this.bubbles=options.bubbles==true; this.trusted=false; this.eventPhase=Node.NONE; }
     Event.prototype.preventDefault = function () { this.do_default = false; }
