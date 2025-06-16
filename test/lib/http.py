@@ -48,8 +48,8 @@ class Request:
         if self.is_closed:
             return
         response = "HTTP/1.0 {} {}\r\n".format(self.status, self.explanation)
-        for key, value in enumerate(self.response_headers):
-            response += "{}: {}\r\n".format(key, value)
+        for key in self.response_headers:
+            response += "{}: {}\r\n".format(key, self.response_headers[key])
         response += "Content-Length: {}\r\n".format(len(self.body.encode("utf8")))
         response += "\r\n" + self.body
         self.conx.send(response.encode("utf8"))
