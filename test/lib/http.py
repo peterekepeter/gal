@@ -14,7 +14,7 @@ class Request:
         req = conx.makefile("b")
         reqline = req.readline().decode("utf8")
         method, path, version = reqline.split(" ", 2)
-        headers = {}
+        self.headers = {}
         self.method = method
         self.path = path
         self.version = version
@@ -25,10 +25,10 @@ class Request:
             if line == "\r\n":
                 break
             header, value = line.split(":", 1)
-            headers[header.casefold()] = value.strip()
+            self.headers[header.casefold()] = value.strip()
 
-            if "content-length" in headers:
-                length = int(headers["content-length"])
+            if "content-length" in self.headers:
+                length = int(self.headers["content-length"])
                 self.body = req.read(length).decode("utf8")
 
     def set_status(self, status, explanation=""):
@@ -40,6 +40,9 @@ class Request:
 
     def set_header(self, key, value):
         self.response_headers[key] = value
+
+    def get_header(self, key):
+        return self.headers.get(key.casefold())
 
     def set_body(self, body):
         self.body = body
