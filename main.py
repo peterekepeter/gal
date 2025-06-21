@@ -179,7 +179,7 @@ class URL:
             (s, f) = sock_pool[key]  # reuse existing socket
         else:
             import socket  # init new TCP/IP connection
-
+            print("REQUEST", self.host, self.port)
             s = socket.socket(
                 family=socket.AF_INET,
                 type=socket.SOCK_STREAM,

@@ -1,5 +1,6 @@
 import socket
 import os
+import threading
 
 class Request:
     def __init__(self, conx, addr):
@@ -93,11 +94,15 @@ class HttpServer:
         self.is_exit_process = False
         self.exit_process_code = 0
         if print_address:
-            print(self.get_address())
+            print("listening on", self.get_address())
 
     def get_address(self) -> str:
         addr = self.s.getsockname()
-        return "http://{}:{}".format(addr[0], addr[1])
+        host = addr[0]
+        port = addr[1]
+        if host == "0.0.0.0":
+            host = "localhost"
+        return "http://{}:{}".format(host,port)
 
     # NOTE: never returns
     def listen(self):
@@ -120,6 +125,10 @@ class HttpServer:
         if self.is_exit_process:
             exit(self.exit_process_code)
         
+    def listen_on_thread(self):
+        self.thread = threading.Thread(target=self.listen)
+        self.thread.start()
+
     def _exec_cmd_list(self, res, x):
         for item in x:
             self._exec_cmd(res, item)
