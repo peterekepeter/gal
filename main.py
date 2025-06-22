@@ -98,7 +98,7 @@ class URL:
     def origin(self):
         return self.scheme + "://" + self.host + ":" + str(self.port)
 
-    def request(self, max_redirect=3, readcache=True, payload=None, cookies=None):
+    def request(self, referrer=None, max_redirect=3, readcache=True, payload=None, cookies=None):
         if self.scheme == "about":
             if self.path == "blank":
                 return ""
@@ -111,13 +111,13 @@ class URL:
                 raise Exception("cannot POST payload to file")
             return self.request_file()
         else:
-            return self.request_socket(max_redirect, readcache, payload, cookies)
+            return self.request_socket(max_redirect, readcache, payload, cookies, referrer)
 
     def request_file(self):
         with open(self.path) as f:
             return f.read()
 
-    def request_socket(self, max_redirect=3, readcache=True, payload=None, cookies=None):
+    def request_socket(self, max_redirect=3, readcache=True, payload=None, cookies=None, referrer=None):
         global sock_pool
         global http_cache
         global http_cache_blob_dir
@@ -200,9 +200,15 @@ class URL:
             "Connection: keep-alive\r\n",
             "Accept-Encoding: gzip\r\n",
         ]
-        cookie = cookies.get_cookie_by_host(self.host) if cookies else None
-        if cookie:
-            reqlines.append("Cookie: {}\r\n".format(cookie))
+        cookie_item = cookies.get_cookie_item_by_host(self.host) if cookies else None
+        if cookie_item:
+            cookie, params = cookie_item
+            allow_cookie = True
+            if referrer and params.get("samesite", "none") == "lax":
+                if method != "GET":
+                    allow_cookie = self.host == referrer.host
+            if allow_cookie:
+                reqlines.append("Cookie: {}\r\n".format(cookie))
         if payload:
             length = len(payload.encode("utf8"))
             reqlines.append("Content-Length: {}\r\n".format(length))
@@ -1018,13 +1024,22 @@ class CookieJar:
         self.data = {}
         self.dirty = False
 
-    def get_cookie_by_host(self, host):
-        return self.data.get(host)
+    def get_cookie_value_by_host(self, host):
+        item = self.get_cookie_item_by_host(host)
+        if item:
+            return item[0]
 
-    def set_cookie_by_host(self, host, value):
-        print("set_cookie_by_host", host, value)
-        if self.get_cookie_by_host(host) != value:
-            self.data[host] = value
+    def get_cookie_item_by_host(self, host):
+        item = self.data.get(host)
+        if isinstance(item, str):
+            item = parse_cookie(str)
+        return item
+
+    def set_cookie_by_host(self, host, cookie):
+        item = parse_cookie(cookie)
+        print("set_cookie_by_host", host, item)
+        if self.get_cookie_item_by_host(host) != item:
+            self.data[host] = item
             self.dirty = True
             print("setting data value",self.data, self)
         else:
@@ -1041,6 +1056,19 @@ class CookieJar:
             self.file.data = self.data
             self.file.save()
             self.dirty = False
+
+
+def parse_cookie(cookie):
+    params = {}
+    if ";" in cookie:
+        cookie, rest = cookie.split(";", 1)
+        for param in rest.split(";"):
+            if '=' in param:
+                param, value = param.split("=", 1)
+            else:
+                value = "true"  
+        params[param.strip().casefold()] = value.casefold()
+    return [cookie, params]
 
 
 class BrowserHistory:
@@ -2023,7 +2051,7 @@ class GUIBrowserTab:
             link = node.attributes["href"]
             style_url = URL(link, parent=self.url)
             try:
-                body = style_url.request()
+                body = style_url.request(referrer=self.url)
                 self.rules.extend(CSSParser(body).parse())
             except Exception as e:
                 print("failed to load stylesheet", style_url, e)
@@ -2034,7 +2062,7 @@ class GUIBrowserTab:
         try:
             if src:
                 script_url = URL(src, parent=self.url)
-                code = script_url.request()
+                code = script_url.request(referrer=self.url)
             else:
                 script_url = f'{self.url}'
                 code = node.get_text()

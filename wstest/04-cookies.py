@@ -15,6 +15,7 @@ HttpServer(
     )
     if x.path == "/login" and x.get_header("Cookie") == "session=1234"
     else (
+        print("Cookie was", x.get_header("Cookie")),
         404,
         ExitProcess(1),
     )

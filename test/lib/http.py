@@ -82,12 +82,12 @@ class ExitProcess:
 
 # TODO: might need to extract this
 class HttpServer:
-    def __init__(self, handler, port=None, print_address=True, print_requests=True):
+    def __init__(self, handler, address="127.0.0.1", port=None, print_address=True, print_requests=True):
         if port is None:
             port = int(os.environ.get("DEFAULT_HTTP_PORT", "8000"))
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP)
         self.s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.s.bind(("", port))
+        self.s.bind((address, port))
         self.print_requests = print_requests
         self.handler = handler
         self.is_exit = False
