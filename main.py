@@ -583,6 +583,7 @@ class JSContext:
         js.export_function("getComputedStyle", self._getComputedStyle)
         js.export_function("XHR_send", self._xhr_send)
         js.export_function("location_set", self._location_set)
+        js.export_function("do_default", self._do_default)
 
     def _outerHTML_get(self, handle):
         elt = self.handle_to_node[handle]
@@ -683,6 +684,11 @@ class JSContext:
     def _location_set(self, value):
         travelurl = self.tab.resolve_url(value)
         self.tab.state.pushlocation(travelurl)
+        self.tab.restorestate()
+    
+    def _do_default(self, handle, event_type):
+        node = self.handle_to_node[handle]
+        self.tab.do_default(node, event_type)
         self.tab.restorestate()
 
     def _get_handle(self, elt):
@@ -2136,6 +2142,11 @@ class GUIBrowserTab:
             self.scroll = self.scroll_bottom - self.height
         if self.scroll < 0:
             self.scroll = 0
+
+    def do_default(self, node, event_type):
+        if event_type == "click":
+            button = 1 # TODO grab from event
+            self.handle_default_click(node, button)
 
     def click(self, x, y, button):
 

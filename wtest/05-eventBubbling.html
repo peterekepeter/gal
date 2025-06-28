@@ -21,10 +21,8 @@
         wrapperdiv.addEventListener("click", function(e) {
             document.title = "passed"
             e.stopPropagation()
+            e.preventDefault()
         })
         mybtn.dispatchEvent(new Event("click", { bubbles: true }))
-        prevent.addEventListener('click', function (event) {
-            event.preventDefault();
-        })
     }
 </script>

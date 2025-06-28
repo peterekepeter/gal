@@ -37,24 +37,29 @@
         for (var i=0; i<list.length; i+=1) {
             list[i].call(this, event)
         }
-        if (!event.bubbles) {
-            return event.do_default;
-        }
-        event.eventPhase = Event.BUBBLING_PHASE;
-        var parent = this.parent;
-        while (parent && event.bubbles) {
-            var node = parent;
-            parent = parent.parent;
-            var listenerTypes = LISTENERS[node.handle];
-            if (!listenerTypes) continue;
-            var list = listenerTypes[type];
-            if (!list) continue;
-            for (var i=0; i<list.length; i+=1) {
-                list[i].call(node, event);
+        if (event.bubbles) {
+            event.eventPhase = Event.BUBBLING_PHASE;
+            var parent = this.parent;
+            while (parent && event.bubbles) {
+                var node = parent;
+                parent = parent.parent;
+                var listenerTypes = LISTENERS[node.handle];
+                if (!listenerTypes) continue;
+                var list = listenerTypes[type];
+                if (!list) continue;
+                for (var i=0; i<list.length; i+=1) {
+                    list[i].call(node, event);
+                }
             }
         }
-        return event.do_default;
+        if (event.__ret) {
+            return event.do_default;
+        }
+        else if (event.do_default) {
+            py("do_default", handle, type);
+        }
     }
+    Node.prototype.click = function () { this.dispatchEvent(new Event('click')); }
     Object.defineProperties(Node.prototype, {
         'innerHTML': {  get: function() { return py("innerHTML_get", this.handle); }, set: function(s) { py("innerHTML_set", this.handle, s.toString()); }  },
         'outerHTML': {  get: function() { return py("outerHTML_get", this.handle);}  },
@@ -89,7 +94,7 @@
     window.document = new Document();
     window.window = window;
     window.getComputedStyle = function(node) { return py("getComputedStyle", node.handle) }
-    __dispatch_event = function (handle, type) { var event=new Event(type); event.isTrusted=true; event.bubbles=true; return new Node(handle).dispatchEvent(event) !== false }
+    __dispatch_event = function (handle, type) { var event=new Event(type); event.isTrusted=true; event.bubbles=true; event.__ret=true; return new Node(handle).dispatchEvent(event) !== false }
     __global_node = function (name, handle) { if (typeof window[name] === 'undefined') window[name] = new Node(handle); }
     __global_node_remove = function (name, handle) { if (typeof window[name] !== 'undefined' && window[name] instanceof Node && window[name].handle === handle) delete window[name]; }
 })();
