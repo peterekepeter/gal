@@ -4619,10 +4619,28 @@ def integration_test(browser, testsuite):
     totalend = time.time()
     totalms = int((totalend - totalstart)*1000)
     if len(failed) != 0:
-        print("\x1b[31mwtest failed", failed, "test(s)", totalms, "ms", reset)
+        print("\x1b[31mwtest failed", failed, "test(s)", totalms, "ms", reset, "\x1b[0m")
         raise raised[0] if len(raised) > 0 else Exception("wtest condition not met")
     else:
-        print("\x1b[32m{} all tests passed!".format(testsuite), totalms, "ms", reset)
+        print("\x1b[32m{} all tests passed!".format(testsuite), totalms, "ms", reset, "\x1b[0m")
+
+
+def test_all():
+    import sys
+    import subprocess
+
+
+    # TODO currently there is a bug when the browser initializes multiple times
+    # we currently use subprocesses to stabilize the runs
+    for item in [
+        [sys.executable, sys.argv[0], "--test", "--wtest", "--exit"],
+        [sys.executable, sys.argv[0], "--wstest", "--exit"],
+    ]:
+        p = subprocess.Popen(item)
+        p.wait()
+        if p.returncode != 0:
+            sys.exit(p.returncode)
+
 
 if __name__ == "__main__":
     import sys
@@ -4655,6 +4673,10 @@ if __name__ == "__main__":
                 print("1.0.0")
             elif "--help" == flag:
                 print("gal web browser")
+            elif "--exit" == flag:
+                sys.exit(0)
+            elif "--testall" == flag:
+                test_all()
             elif flag == "--rtl":
                 default_rtl = True
             elif flag in ["--cache-dir", "--profile-dir", "--profile"]:
