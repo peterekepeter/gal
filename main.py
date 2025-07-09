@@ -98,31 +98,32 @@ class URL:
     def origin(self):
         return self.scheme + "://" + self.host + ":" + str(self.port)
 
-    def request(self, referrer=None, max_redirect=3, readcache=True, payload=None, cookies=None):
+    def request(self, referrer=None, max_redirect=3, readcache=True, payload=None, cookies=None, method=None):
         if self.scheme == "about":
             if self.path == "blank":
-                return ""
+                return "", self
             else:
-                return "page not found"
+                return "page not found", self
         if self.scheme == "data":
-            return self.content
+            return self.content, self
         elif self.scheme == "file":
             if payload:
                 raise Exception("cannot POST payload to file")
             return self.request_file()
         else:
-            return self.request_socket(max_redirect, readcache, payload, cookies, referrer)
+            return self.request_socket(max_redirect, readcache, payload, cookies, referrer, method)
 
     def request_file(self):
         with open(self.path) as f:
-            return f.read()
+            return f.read(), self
 
-    def request_socket(self, max_redirect=3, readcache=True, payload=None, cookies=None, referrer=None):
+    def request_socket(self, max_redirect=3, readcache=True, payload=None, cookies=None, referrer=None, method=None):
         global sock_pool
         global http_cache
         global http_cache_blob_dir
 
-        method = "GET" if not payload else "POST"
+        if not method:
+            method = "GET" if not payload else "POST"
 
         if http_cache_dir:
             import os
@@ -163,14 +164,14 @@ class URL:
                 if "content" in cache_entry:
                     content = cache_entry["content"]
                     print("CACHED GET", cache_key)
-                    return content
+                    return content, self
                 if http_cache_blob_dir and "blob_id" in cache_entry:
                     blob_id = cache_entry["blob_id"]
                     with open(http_cache_blob_dir + "/" + blob_id, "rb") as f:
                         bytes = f.read()
                         content = bytes.decode("utf8")
                         print("CACHED GET", cache_key)
-                        return content
+                        return content, self
 
         key = (self.scheme, self.host, self.port)
         s = None
@@ -193,7 +194,6 @@ class URL:
                 s = ctx.wrap_socket(s, server_hostname=self.host)
             f = s.makefile("rb", encoding="utf8", newline="\r\n")
 
-        method = "POST" if payload else "GET"
         reqlines = [
             f"{method} {self.path}{self.search} HTTP/1.1\r\n",
             f"Host: {self.host}\r\n",
@@ -204,7 +204,8 @@ class URL:
         if cookie_item:
             cookie, params = cookie_item
             allow_cookie = True
-            if referrer and params.get("samesite", "none") == "lax":
+            samesite = params.get("samesite", "none")
+            if referrer and samesite == "lax":
                 if method != "GET":
                     allow_cookie = self.host == referrer.host
             if allow_cookie:
@@ -298,13 +299,12 @@ class URL:
             location = response_headers.get("location")
             if location:
                 url = URL(location, parent=self)
-                content = url.request(max_redirect=max_redirect - 1, cookies=cookies)
+                return url.request(max_redirect=max_redirect - 1, cookies=cookies, referrer=self)
 
         if code == 200 and method == "GET":
             cache_control = response_headers.get("cache-control")
             expires = 0
             store = True
-            print("cache_control", cache_control)
             if cache_control is None:
                 pass
             elif "no-store" in cache_control:
@@ -318,7 +318,10 @@ class URL:
                     seconds = int(n.strip())
                     expires = now + seconds * 1000
                 except Exception as err:
-                    print(err)
+                    import traceback
+
+                    print("Failed to handle cache control", err)
+                    print(traceback.format_exc())
                     store = False
             else:
                 # cache control not handled, better not cache
@@ -343,8 +346,8 @@ class URL:
                         json.dump(http_cache, f, indent=1)
                 else:
                     cache_entry["content"] = content
-
-        return content
+        
+        return content, self
 
     def get_cache_key(self) -> str:
         return f"{self.scheme}://{self.host}:{self.port}{self.path}{self.search}"
@@ -679,7 +682,8 @@ class JSContext:
             # otherse compare origin
             # TODO: i think origin handling should be more standardized
             raise Exception("Cross-origin XHR request not allowed")
-        return url.request(payload=body, cookies=self.tab.browser.cookies)
+        content, url = url.request(payload=body, cookies=self.tab.browser.cookies)
+        return content
 
     def _location_set(self, value):
         travelurl = self.tab.resolve_url(value)
@@ -689,7 +693,6 @@ class JSContext:
     def _do_default(self, handle, event_type):
         node = self.handle_to_node[handle]
         self.tab.do_default(node, event_type)
-        self.tab.restorestate()
 
     def _get_handle(self, elt):
         if not elt:
@@ -865,6 +868,14 @@ class BrowserState:
         item = self._get_current_item()
         return item.get("payload")
 
+    def get_method(self) -> str:
+        item = self._get_current_item()
+        method = item.get("method")
+        if method:
+            return method
+        payload = item.get("payload")
+        return "GET" if not payload else "POST"
+
     def get_scroll(self) -> int:
         item = self._get_current_item()
         return item.get("scroll")
@@ -892,7 +903,7 @@ class BrowserState:
             self.data["active_tab_index"] = active
             self.dirty = True
 
-    def pushlocation(self, url, payload=None):
+    def pushlocation(self, url, payload=None, method=None):
         item = self._get_current_item()
         to_return_to = self._create_return_item()
         history_list = item.get("history", [])
@@ -900,10 +911,10 @@ class BrowserState:
         item["history"] = history_list
         if "future" in item:
             item.pop("future")
-        self.replacelocation(url, payload)
+        self.replacelocation(url, payload, method)
         self.dirty = True
 
-    def replacelocation(self, url, payload):
+    def replacelocation(self, url, payload=None, method=None):
         item = self._get_current_item()
         if item.get("url", "") != url:
             item["url"] = url
@@ -913,6 +924,10 @@ class BrowserState:
                 del item["payload"]
             if "scroll" in item:
                 item.pop("scroll")
+            if method:
+                item["method"] = method
+            elif "method" in item:
+                del item["method"]
             self.dirty = True
 
     def can_back(self):
@@ -1015,12 +1030,15 @@ class BrowserState:
         dst["url"] = src.get("url", "")
         dst["scroll"] = src.get("scroll", 0)
         dst["payload"] = src.get("payload", None)
+        dst["method"] = src.get("method", None)
         if dst["scroll"] == 0:
             dst.pop("scroll")
         if dst["url"] == "":
             dst.pop("url")
         if not dst["payload"]:
             dst.pop("payload")
+        if not dst["method"]:
+            dst.pop("method")
 
 
 class CookieJar:
@@ -1192,7 +1210,7 @@ class CLI:
     def browse(self, urlstr, max_redirect=5):
         print("navigating to", urlstr)
         url = URL(urlstr)
-        result = url.request(max_redirect=max_redirect)
+        result, url = url.request(max_redirect=max_redirect)
         if url.viewsource:
             print(result)
         else:
@@ -1970,12 +1988,11 @@ class GUIBrowserTab:
         # proceed with loading GET requests only
         self.load(self.state.get_url(), readcache=not isreload)
 
-    def load(self, urlstr, readcache, payload=None):
+    def load(self, urlstr, readcache, payload=None, referrer=None, method=None):
         self.loaded = ""
         self.loadedpayload = ""
         if urlstr == "" or urlstr.isspace():
             urlstr = "about:blank"
-
         self.modal = None
         self.set_title(urlstr)
         try:
@@ -1997,7 +2014,9 @@ class GUIBrowserTab:
             else:
                 result = "page not found"
         else:  # external data source
-            result = url.request(max_redirect=5, readcache=readcache, payload=payload, cookies=self.browser.cookies)
+            result, url = url.request(max_redirect=5, readcache=readcache, payload=payload, cookies=self.browser.cookies, referrer=referrer, method=method)
+            if self.url is not url:
+                self.url = url # url may change due to request handling redirect
 
         parser_class = HTMLParser if not url.viewsource else HTMLSourceParser
 
@@ -2007,10 +2026,17 @@ class GUIBrowserTab:
         self.rules = rules
 
         nodelist = tree_to_list(self.nodes, [])
+        visited_urls = self.browser.history.get_visited_set()
         for node in nodelist:
             if isinstance(node, Element):
-                eval_visited(node, url, self.browser.history.get_visited_set())
+                eval_visited(node, url, visited_urls)
+                id = node.attributes.get("id")
+                if id and self.js:
+                    self.js.add_global_name(id, node)
                 self.load_node(node)
+                # node may have triggered navigation, abort further action on this page
+                if url is not self.url:
+                    return
         
 
         # style(self.nodes, sorted(rules, key=cascade_priority))
@@ -2032,11 +2058,6 @@ class GUIBrowserTab:
         self.loaded = url.get_str()
         self.loadedpayload = payload
         if self.js:
-            for node in nodelist:
-                if isinstance(node, Element):
-                    id = node.attributes.get("id")
-                    if id:
-                        self.js.add_global_name(id, node)
             self.dispatch_js_event("load", self.get_body())
 
     def load_node(self, node):
@@ -2057,7 +2078,7 @@ class GUIBrowserTab:
             link = node.attributes["href"]
             style_url = URL(link, parent=self.url)
             try:
-                body = style_url.request(referrer=self.url)
+                body, url = style_url.request(referrer=self.url)
                 self.rules.extend(CSSParser(body).parse())
             except Exception as e:
                 print("failed to load stylesheet", style_url, e)
@@ -2068,7 +2089,7 @@ class GUIBrowserTab:
         try:
             if src:
                 script_url = URL(src, parent=self.url)
-                code = script_url.request(referrer=self.url)
+                code, url = script_url.request(referrer=self.url)
             else:
                 script_url = f'{self.url}'
                 code = node.get_text()
@@ -2226,9 +2247,13 @@ class GUIBrowserTab:
 
         if travelurl:
             if button == 1:
+                # TODO add referrer to pushlocation to validate samesite
                 self.state.pushlocation(travelurl)
+                self.restorestate()
             elif button == 2:
+                # TODO add referrer to validate samesite
                 self.state.newtab(travelurl)
+                self.restorestate()
             else:
                 pass
 
@@ -2307,9 +2332,15 @@ class GUIBrowserTab:
         if method == "get":
             href += "?" + body
             body = None
+
+        method=method.upper()
         url = self.resolve_url(href)
-        self.load(url, readcache=False, payload=body)
-        self.state.pushlocation(url, payload=body)
+        # TODO security reasons we should add referrer to state location history as well
+        # so the brower restore cannot be attacked by CSRF
+        self.state.pushlocation(url, payload=body, method=method)
+        # load should be last instruction as it can do a lot
+        self.load(url, readcache=False, payload=body, referrer=self.url, method=method)
+
 
     def is_js_enabled(self):
         if self.js:
@@ -4370,7 +4401,9 @@ def test_URL():
     assert url.scheme == "data"
     assert url.mimetype == "text/html"
     assert url.content == "Hello world!"
-    assert url.request() == "Hello world!"
+    content, url = url.request()
+    assert content == "Hello world!"
+    assert url.scheme == "data"
 
     url = URL("view-source:http://example.org/")
     assert url.viewsource is True
@@ -4540,6 +4573,10 @@ def test_BrowserState():
     assert state.get_payload() is None
     state.back()
     assert state.get_payload() == "&subscribe=on"
+
+    # with method
+    state.pushlocation("https://example.com", method="POST")
+    assert state.get_method() == "POST"
 
 
 def test_BrowserBookmarks():

@@ -2,6 +2,7 @@ import socket
 import os
 import threading
 
+
 class Request:
     def __init__(self, conx, addr):
         self.conx = conx
@@ -43,7 +44,7 @@ class Request:
         self.response_headers[key] = value
 
     def get_header(self, key):
-        return self.headers.get(key.casefold())
+        return self.headers.get(key.casefold(), "")
 
     def set_body(self, body):
         self.body = body
@@ -60,34 +61,50 @@ class Request:
         self.conx.close()
         self.is_closed = True
 
+
 class Html:
     def __init__(self, content):
         self.content = content
 
+
 class Text:
     def __init__(self, content):
         self.content = content
+
 
 class Header:
     def __init__(self, key, value):
         self.key = key
         self.value = value
 
+
 class ExitServer:
     pass
+
 
 class ExitProcess:
     def __init__(self, code=0):
         self.code = code
 
+
 # TODO: might need to extract this
 class HttpServer:
-    def __init__(self, handler, address="127.0.0.1", port=None, print_address=True, print_requests=True):
+    def __init__(
+        self,
+        handler,
+        address="localhost",
+        port=None,
+        print_address=True,
+        print_requests=True,
+    ):
         if port is None:
             port = int(os.environ.get("DEFAULT_HTTP_PORT", "8000"))
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP)
         self.s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.s.bind((address, port))
+        self._address = address
+        self._bind_address = address if address != "localhost" else "127.0.0.1"
+        self._bind_port = port
+        self.s.bind((self._bind_address, self._bind_port))
         self.print_requests = print_requests
         self.handler = handler
         self.is_exit = False
@@ -96,13 +113,21 @@ class HttpServer:
         if print_address:
             print("listening on", self.get_address())
 
-    def get_address(self) -> str:
-        addr = self.s.getsockname()
-        host = addr[0]
-        port = addr[1]
+    def get_address(self, localhost=True) -> str:
+        host = self._address
+        port = self._bind_port
+        if not port:
+            addr = self.s.getsockname()
+            port = addr[1]
         if host == "0.0.0.0":
-            host = "localhost"
-        return "http://{}:{}".format(host,port)
+            host = "127.0.0.1"  # make it a valid address
+        return "http://{}:{}".format(host, port)
+
+    def get_address_ip(self) -> str:
+        return self.get_address(localhost=False)
+
+    def get_address_localhost(self) -> str:
+        return self.get_address(localhost=True)
 
     # NOTE: never returns
     def listen(self):
@@ -110,21 +135,22 @@ class HttpServer:
         while not self.is_exit:
             conx, addr = self.s.accept()
             res = Request(conx, addr)
-            try: 
+            try:
                 x = self.handler(res)
                 if isinstance(x, list) or isinstance(x, tuple):
                     self._exec_cmd_list(res, x)
                 else:
                     self._exec_cmd(res, x)
-            except Exception as e:
+            except Exception as e:                
+                import traceback
                 res.set_status(500, "Internal Server Error")
-                res.set_body(str(e))
+                res.set_body(f"{str(e)}\n{traceback.format_exc()}")
             if self.print_requests:
                 print("{} {} {}".format(res.method, res.path, res.status))
             res.send_response()
         if self.is_exit_process:
             exit(self.exit_process_code)
-        
+
     def listen_on_thread(self):
         self.thread = threading.Thread(target=self.listen)
         self.thread.start()
@@ -152,4 +178,3 @@ class HttpServer:
             self.is_exit = True
             self.is_exit_process = True
             self.exit_process_code = x.code
-

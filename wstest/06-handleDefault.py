@@ -1,5 +1,5 @@
 # # web service test 01 - basic sanity check
-from test.lib import HttpServer, Html, Header, ExitProcess
+from test.lib import HttpServer, Html, ExitProcess
 
 HttpServer(
     lambda x: (
