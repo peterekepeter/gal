@@ -1056,7 +1056,7 @@ class CookieJar:
     def get_cookie_item_by_host(self, host):
         item = self.data.get(host)
         if isinstance(item, str):
-            item = parse_cookie(str)
+            item = parse_cookie(item)
         return item
 
     def set_cookie_by_host(self, host, cookie):

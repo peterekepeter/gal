@@ -1,3 +1,5 @@
+# This is a server meant for TESTING there are no security guarantees
+
 import socket
 import random
 
@@ -204,8 +206,8 @@ def show_comments(session, flt=""):
                 entry = parts[1]
             else:
                 who = "unknown"
-            out += "<p>" + entry
-            out += "<i> by " + who + "</i></p>"
+            out += "<p>" + html.escape(entry)
+            out += "<i> by " + html.escape(who) + "</i></p>"
     out += "<form action=add method=post>\n"
     out += "<p><input name=guest></p>\n"
     out += "<p><button>Sign the book!</button></p>\n"
