@@ -72,6 +72,11 @@ class Text:
         self.content = content
 
 
+class JavaScript:
+    def __init__(self, content):
+        self.content = content
+
+
 class Header:
     def __init__(self, key, value):
         self.key = key
@@ -141,8 +146,9 @@ class HttpServer:
                     self._exec_cmd_list(res, x)
                 else:
                     self._exec_cmd(res, x)
-            except Exception as e:                
+            except Exception as e:
                 import traceback
+
                 res.set_status(500, "Internal Server Error")
                 res.set_body(f"{str(e)}\n{traceback.format_exc()}")
             if self.print_requests:
@@ -170,6 +176,9 @@ class HttpServer:
         elif isinstance(x, Text):
             res.set_body(x.content)
             res.set_header("Content-Type", "text/plain")
+        elif isinstance(x, JavaScript):
+            res.set_body(x.content)
+            res.set_header("Content-Type", "text/javascript")
         elif isinstance(x, Header):
             res.set_header(x.key, x.value)
         elif isinstance(x, ExitServer):

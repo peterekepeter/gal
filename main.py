@@ -105,7 +105,7 @@ class URL:
             else:
                 return "page not found", self
         if self.scheme == "data":
-            return self.content, self
+            return {}, self.content, self
         elif self.scheme == "file":
             if payload:
                 raise Exception("cannot POST payload to file")
@@ -115,7 +115,7 @@ class URL:
 
     def request_file(self):
         with open(self.path) as f:
-            return f.read(), self
+            return {}, f.read(), self
 
     def request_socket(self, max_redirect=3, readcache=True, payload=None, cookies=None, referrer=None, method=None):
         global sock_pool
@@ -171,7 +171,7 @@ class URL:
                         bytes = f.read()
                         content = bytes.decode("utf8")
                         print("CACHED GET", cache_key)
-                        return content, self
+                        return {}, content, self
 
         key = (self.scheme, self.host, self.port)
         s = None
@@ -180,7 +180,6 @@ class URL:
             (s, f) = sock_pool[key]  # reuse existing socket
         else:
             import socket  # init new TCP/IP connection
-            print("REQUEST", self.host, self.port)
             s = socket.socket(
                 family=socket.AF_INET,
                 type=socket.SOCK_STREAM,
@@ -347,7 +346,7 @@ class URL:
                 else:
                     cache_entry["content"] = content
         
-        return content, self
+        return response_headers, content, self
 
     def get_cache_key(self) -> str:
         return f"{self.scheme}://{self.host}:{self.port}{self.path}{self.search}"
@@ -682,7 +681,11 @@ class JSContext:
             # otherse compare origin
             # TODO: i think origin handling should be more standardized
             raise Exception("Cross-origin XHR request not allowed")
-        content, url = url.request(payload=body, cookies=self.tab.browser.cookies)
+        if not self.tab.allowed_request(url):
+            # TODO add wstest specifically for this
+            print("Blocked XHR", url, "due to CSP")
+            return None
+        _, content, url = url.request(payload=body, cookies=self.tab.browser.cookies)
         return content
 
     def _location_set(self, value):
@@ -1210,7 +1213,7 @@ class CLI:
     def browse(self, urlstr, max_redirect=5):
         print("navigating to", urlstr)
         url = URL(urlstr)
-        result, url = url.request(max_redirect=max_redirect)
+        _, result, url = url.request(max_redirect=max_redirect)
         if url.viewsource:
             print(result)
         else:
@@ -2006,6 +2009,7 @@ class GUIBrowserTab:
         finally:
             self.url = url
 
+        headers = {}
         if url.scheme == "about":  # handle meta pages
             if url.path == "blank":
                 result = ""
@@ -2014,9 +2018,17 @@ class GUIBrowserTab:
             else:
                 result = "page not found"
         else:  # external data source
-            result, url = url.request(max_redirect=5, readcache=readcache, payload=payload, cookies=self.browser.cookies, referrer=referrer, method=method)
+            headers, result, url = url.request(max_redirect=5, readcache=readcache, payload=payload, cookies=self.browser.cookies, referrer=referrer, method=method)
             if self.url is not url:
                 self.url = url # url may change due to request handling redirect
+
+        self.allowed_origins = None
+        if "content-security-policy" in headers:
+            csp = headers["content-security-policy"].split()
+            if len(csp) > 0 and csp[0] == "default-src":
+                self.allowed_origins = []
+                for origin in csp[1:]:
+                    self.allowed_origins.append(URL(origin).origin())
 
         parser_class = HTMLParser if not url.viewsource else HTMLSourceParser
 
@@ -2078,7 +2090,7 @@ class GUIBrowserTab:
             link = node.attributes["href"]
             style_url = URL(link, parent=self.url)
             try:
-                body, url = style_url.request(referrer=self.url)
+                _, body, url = style_url.request(referrer=self.url)
                 self.rules.extend(CSSParser(body).parse())
             except Exception as e:
                 print("failed to load stylesheet", style_url, e)
@@ -2089,7 +2101,10 @@ class GUIBrowserTab:
         try:
             if src:
                 script_url = URL(src, parent=self.url)
-                code, url = script_url.request(referrer=self.url)
+                if not self.allowed_request(script_url):
+                    print("Blocked script", script_url, "due to CSP")
+                    return
+                _, code, url = script_url.request(referrer=self.url)
             else:
                 script_url = f'{self.url}'
                 code = node.get_text()
@@ -2113,6 +2128,8 @@ class GUIBrowserTab:
                 if isinstance(node, Element) and node.tag == "link":
                     self.load_link(node)
         
+    def allowed_request(self, url):
+        return self.allowed_origins is None or url.origin() in self.allowed_origins
 
     def render(self):
         self.display_list = []
@@ -4401,7 +4418,7 @@ def test_URL():
     assert url.scheme == "data"
     assert url.mimetype == "text/html"
     assert url.content == "Hello world!"
-    content, url = url.request()
+    _, content, url = url.request()
     assert content == "Hello world!"
     assert url.scheme == "data"
 
@@ -4712,7 +4729,7 @@ if __name__ == "__main__":
                 print("gal web browser")
             elif "--exit" == flag:
                 sys.exit(0)
-            elif "--testall" == flag:
+            elif "--testall" == flag or "--test-all" == flag:
                 test_all()
             elif flag == "--rtl":
                 default_rtl = True
