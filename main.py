@@ -512,6 +512,20 @@ def collect_HTML_parts(node, parts):
     return parts
 
 
+def input_element_handle_input(node: Element, input_txt: str):
+    if node.tag != "input":
+        return False
+    attr = node.attributes
+    type = attr.get("type")
+    if type and type != "text":
+        return False
+    txt = attr.get("value", "")
+    pos = node.cursor
+    attr["value"] = txt[:pos] + input_txt + txt[pos:]
+    node.cursor = max(0, min(len(txt) + 1, node.cursor + len(input_txt)))
+    return True
+
+
 class JSContext:
     def is_feature_avaiable():
         try:
@@ -2283,9 +2297,11 @@ class GUIBrowserTab:
     def input(self, txt):
         if self.focus:
             if self.dispatch_js_event("keydown", self.focus):
-                return
-            self.focus.attributes["value"] += txt
-            self.render()
+                return True
+            if input_element_handle_input(self.focus, txt):
+                self.render()
+                return True
+        return False
 
     def pressenter(self):
         if self.focus:
@@ -2428,17 +2444,9 @@ class HTMLView:
         
     def input(self, input_txt):
         if self.focus and self.focus.tag == "input":
-            node = self.focus
-            attr = node.attributes
-            type = attr.get("type")
-            if type and type != "text":
-                return False
-            txt = attr.get("value", "")
-            pos = node.cursor
-            attr["value"] = txt[:pos] + input_txt + txt[pos:]
-            node.cursor = max(0, min(len(txt) + 1, node.cursor + len(input_txt)))
-            self.paint()
-            return True
+            if input_element_handle_input(self.focus, input_txt):
+                self.paint()
+                return True
         return False
 
     def pressbackspace(self):
@@ -3176,9 +3184,6 @@ class InputLayout:
                 child.y = self.y
                 child.layout()
 
-
-
-
     def should_paint(self):
         return True
 
@@ -3194,7 +3199,6 @@ class InputLayout:
 
         if self.children:
             drawtext = False
-
 
         if bgcolor != "transparent":
             rect = DrawRect(self.self_rect(), bgcolor, self.node)
@@ -3238,9 +3242,10 @@ class InputLayout:
             cmds.append(DrawText(rect, text, self.font, self.color, self.node))
 
             if self.node.is_focused:
-                text = self.get_text()
                 pos = self.node.cursor
-                textwidth = self.x + self.font.measure(text[0:pos])
+                text_to_measure = text[0:pos]
+                textwidth = self.x + self.font.measure(text_to_measure)
+                print(text, textwidth, pos)
                 cmds.append(
                     DrawLine(
                         textwidth + pleft,
