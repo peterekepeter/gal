@@ -517,7 +517,7 @@ def input_element_handle_input(node: Element, input_txt: str):
         return False
     attr = node.attributes
     type = attr.get("type")
-    if type and type != "text":
+    if type and type != "text" and type != "password":
         return False
     txt = attr.get("value", "")
     pos = node.cursor
@@ -531,7 +531,7 @@ def input_element_handle_backspace(node):
         return False
     attr = node.attributes
     type = attr.get("type")
-    if type and type != "text":
+    if type and type != "text" and type != "password":
         return False
     txt = attr.get("value", "")
     pos = node.cursor
@@ -547,7 +547,7 @@ def input_element_move_cursor(node, amount):
         return False
     attr = node.attributes
     type = attr.get("type")
-    if type and type != "text":
+    if type and type != "text" and type != "password":
         return False
     txt = attr.get("value", "")
     node.cursor = max(0, min(len(txt) + 1, node.cursor + amount))
@@ -1988,7 +1988,7 @@ class HTMLChrome:
                     <a href=forward>&gt;</a>
                     <a href=reload>\u21ba</a>
                     <a href=bookmark>{bookmark_icon}</a>
-                    <input name=url value={url}/>
+                    <input name=url value="{url}" />
                 </div>
                 <div class="bottom"></div>
             </body>
@@ -3125,6 +3125,8 @@ class InputLayout:
 
     def determine_width(node):
         nodetype = node.attributes.get("type")
+        if nodetype == "hidden":
+            return 0
         if nodetype == "checkbox":
             return InputLayout.CHECKBOX_SIZE
         stylewidth = node.style.get("width")
@@ -3234,6 +3236,8 @@ class InputLayout:
                 child.layout()
 
     def should_paint(self):
+        if self.node.attributes.get("type") == "hidden":
+            return False
         return True
 
     def paint(self):
@@ -3241,8 +3245,9 @@ class InputLayout:
         bgcolor = self.node.style.get("background-color", "transparent")
         drawtext = True
         drawcheck = False
+        type = self.node.attributes.get("type")
 
-        if self.node.attributes.get("type") == "checkbox":
+        if type == "checkbox":
             drawtext = False
             drawcheck = True
 
@@ -3270,6 +3275,8 @@ class InputLayout:
         pleft += parse_size(self.node.style.get("padding-left"))
 
         text = self.get_text()
+        if type == "password":
+            text = "*" * len(text)
         textwidth = self.font.measure(text)
         align = self.node.style.get("text-align")
         if align == "center":
