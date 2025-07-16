@@ -526,6 +526,49 @@ def input_element_handle_input(node: Element, input_txt: str):
     return True
 
 
+def input_element_handle_backspace(node):
+    if node.tag != "input":
+        return False
+    attr = node.attributes
+    type = attr.get("type")
+    if type and type != "text":
+        return False
+    txt = attr.get("value", "")
+    pos = node.cursor
+    node.cursor = max(0, node.cursor - 1)
+    if pos > 0:
+        attr["value"] = txt[: pos - 1] + txt[pos:]
+        return True
+    return False
+
+
+def input_element_move_cursor(node, amount):
+    if node.tag != "input":
+        return False
+    attr = node.attributes
+    type = attr.get("type")
+    if type and type != "text":
+        return False
+    txt = attr.get("value", "")
+    node.cursor = max(0, min(len(txt) + 1, node.cursor + amount))
+    return True
+
+
+def input_element_handle_click(node):
+    if node.tag != "input":
+        return False
+    nodetype = node.attributes.get("type")
+    if nodetype == "checkbox":
+        if hasattr(node, "ischecked"):
+            node.ischecked = not node.ischecked
+        else:
+            node.ischecked = True
+    else:
+        node.cursor = len(node.attributes.get("value", ""))
+    return True
+        # node.attributes["value"] = ""
+
+
 class JSContext:
     def is_feature_avaiable():
         try:
@@ -1329,15 +1372,21 @@ class GUIBrowser:
         self.draw()
 
     def pressarrowleft(self, e):
-        self.chrome.pressarrowleft()
-        self.draw()
+        if self.chrome.pressarrowleft():
+            self.draw()
+        elif self.active_tab.pressarrowleft():
+            self.draw()
 
     def pressarrowright(self, e):
-        self.chrome.pressarrowright()
-        self.draw()
+        if self.chrome.pressarrowright():
+            self.draw()
+        elif self.active_tab.pressarrowright():
+            self.draw()
 
     def pressbackspace(self, e):
         if self.chrome.pressbackspace():
+            self.draw()
+        elif self.active_tab.pressbackspace():
             self.draw()
         else:
             self.state.back()
@@ -1862,13 +1911,13 @@ class HTMLChrome:
         pass
 
     def pressarrowleft(self):
-        self._view.pressarrowleft()
+        return self._view.pressarrowleft()
 
     def pressarrowright(self):
-        self._view.pressarrowright()
+        return self._view.pressarrowright()
 
     def input(self, input_txt):
-        self._view.input(input_txt)
+        return self._view.input(input_txt)
 
     def enter(self):
         if not self._view.enter() and self._view.focus:
@@ -1878,7 +1927,7 @@ class HTMLChrome:
                 self.browser.addressbarsubmit(value)
 
     def pressbackspace(self):
-        self._view.pressbackspace()
+        return self._view.pressbackspace()
 
     def resize(self, width, height):
         self.rect = Rect(0, 0, width, height)
@@ -1939,7 +1988,7 @@ class HTMLChrome:
                     <a href=forward>&gt;</a>
                     <a href=reload>\u21ba</a>
                     <a href=bookmark>{bookmark_icon}</a>
-                    <input name=url value="{url}"/>
+                    <input name=url value={url}/>
                 </div>
                 <div class="bottom"></div>
             </body>
@@ -2246,16 +2295,9 @@ class GUIBrowserTab:
                     travelurl = self.resolve_url(node.attributes["href"])
                     self.focus = node
                 elif node.tag == "input":
-                    nodetype = node.attributes.get("type")
                     if self.dispatch_js_event('click', node):
                         return
-                    if nodetype == "checkbox":
-                        if hasattr(node, "ischecked"):
-                            node.ischecked = not node.ischecked
-                        else:
-                            node.ischecked = True
-                    else:
-                        node.attributes["value"] = ""
+                    input_element_handle_click(node)
                     need_render = True
                     self.focus = node
                 elif node.tag == "button":
@@ -2301,6 +2343,35 @@ class GUIBrowserTab:
             if input_element_handle_input(self.focus, txt):
                 self.render()
                 return True
+        return False
+
+    def pressarrowright(self):
+        if not self.focus:
+            return False
+        if self.dispatch_js_event("keydown", self.focus):
+            return True
+        if input_element_move_cursor(self.focus, +1):
+            self.render()
+            return True
+        return False
+
+    def pressarrowleft(self):
+        if not self.focus:
+            return False
+        if self.dispatch_js_event("keydown", self.focus):
+            return True
+        if input_element_move_cursor(self.focus, -1):
+            self.render()
+            return True
+        return False
+
+    def pressbackspace(self):
+        if self.focus:
+            if self.dispatch_js_event("keydown", self.focus):
+                pass
+            elif input_element_handle_backspace(self.focus):
+                self.render()
+            return True
         return False
 
     def pressenter(self):
@@ -2451,18 +2522,9 @@ class HTMLView:
 
     def pressbackspace(self):
         if self.focus and self.focus.tag == "input":
-            node = self.focus
-            attr = node.attributes
-            type = attr.get("type")
-            if type and type != "text":
-                return False
-            txt = attr.get("value", "")
-            pos = node.cursor
-            if pos > 0:
-                attr["value"] = txt[: pos - 1] + txt[pos:]
-                self.address_bar = txt
-            node.cursor = max(0, node.cursor - 1)
-            self.paint()
+            if input_element_handle_backspace(self.focus):
+                self.paint()
+                self.address_bar = self.focus.attributes.get("value", "")
             return True
         return False
 
@@ -2474,15 +2536,9 @@ class HTMLView:
 
     def _movecursor(self, amount):
         if self.focus and self.focus.tag == "input":
-            node = self.focus
-            attr = node.attributes
-            type = attr.get("type")
-            if type and type != "text":
-                return False
-            txt = attr.get("value", "")
-            node.cursor = max(0, min(len(txt) + 1, node.cursor + amount))
-            self.paint()
-            return True
+            if input_element_move_cursor(self.focus, amount):
+                self.paint()
+                return True
         return False
         
     def enter(self):
@@ -2508,14 +2564,7 @@ class HTMLView:
                 if node.tag == "a" and "href" in node.attributes or node.tag == "button":
                     self.focus = node
                 if node.tag == "input":
-                    nodetype = node.attributes.get("type")
-                    if nodetype == "checkbox":
-                        if hasattr(node, "ischecked"):
-                            node.ischecked = not node.ischecked
-                        else:
-                            node.ischecked = True
-                    else:
-                        node.attributes["value"] = ""
+                    input_element_handle_click(node)
                     need_render = True
                     self.focus = node
             node = node.parent
@@ -3245,7 +3294,6 @@ class InputLayout:
                 pos = self.node.cursor
                 text_to_measure = text[0:pos]
                 textwidth = self.x + self.font.measure(text_to_measure)
-                print(text, textwidth, pos)
                 cmds.append(
                     DrawLine(
                         textwidth + pleft,
