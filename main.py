@@ -944,6 +944,10 @@ class BrowserState:
         item = self._get_current_item()
         return item.get("history", None)
 
+    def get_secure(self) -> str:
+        item = self._get_current_item()
+        return item.get("secure", "")
+
     def newtab(self, url: str):
         tabs = self.data.get("tabs", [])
         tabs.append({"url": url})
@@ -1026,6 +1030,14 @@ class BrowserState:
             item["scroll"] = pos
             if pos is None:
                 item.pop("scroll")
+            self.dirty = True
+
+    def set_secure(self, state: str):
+        item = self._get_current_item()
+        if item.get("secure", "") != state:
+            item["secure"] = state
+            if not state:
+                item.pop("secure")
             self.dirty = True
 
     def set_window_size(self, w: int, h: int):
@@ -1255,6 +1267,21 @@ class BrowserBookmarks:
             self.data["bookmarks"].pop(url)
             self.dirty = True
 
+
+def generate_error_page(err: Exception, url) -> str:
+    import traceback
+    stack = traceback.format_exc()
+    return f"""
+        <title>Error - {url}</title>
+        <h1>Error </h1>
+        <h2>An error was encountered while trying to load the following url</h2>
+        <code>{url}</code>
+        <h2>{type(err).__name__}</h2>
+        <code><pre>{err}</pre></code>
+        <h2>Stack trace</h2>
+        <code><pre>{stack}</pre></code>
+    """
+    
 
 def generate_bookmarks_page(bookmarks: BrowserBookmarks) -> str:
     result = ["<title>Bookmarks</title><style>small { color:green }</style>"]
@@ -1976,6 +2003,15 @@ class HTMLChrome:
             tabs.append(f"<a href=showtab/{i}>{str}</a>")
             if i == active_tab_index:
                 tabs.append(f"</b><a href=close/{i}>x</a>")
+
+        match self.browser.state.get_secure():
+            case "yes":
+                padlock = "<span style=color:green>\N{lock}</span>"
+            case "no":
+                padlock = "<span style=color:red>\N{SKULL AND CROSSBONES}</span>"
+            case _:
+                padlock = ""
+
         self._view.set_innerHTML(f"""
             <body>
                 <div>
@@ -1988,6 +2024,7 @@ class HTMLChrome:
                     <a href=forward>&gt;</a>
                     <a href=reload>\u21ba</a>
                     <a href=bookmark>{bookmark_icon}</a>
+                    {padlock}
                     <input name=url value="{url}" />
                 </div>
                 <div class="bottom"></div>
@@ -2079,11 +2116,20 @@ class GUIBrowserTab:
             elif url.path == "bookmarks":
                 result = generate_bookmarks_page(self.browser.bookmarks)
             else:
-                result = "page not found"
+                raise Exception("about page not found!")
         else:  # external data source
-            headers, result, url = url.request(max_redirect=5, readcache=readcache, payload=payload, cookies=self.browser.cookies, referrer=referrer, method=method)
-            if self.url is not url:
-                self.url = url # url may change due to request handling redirect
+            try:
+                headers, result, url = url.request(max_redirect=5, readcache=readcache, payload=payload, cookies=self.browser.cookies, referrer=referrer, method=method)
+                if self.url is not url:
+                    self.url = url # url may change due to request handling redirect
+                self.state.set_secure("yes" if self.url.scheme == "https" else "")
+            except Exception as err:
+                import ssl
+                if isinstance(err, ssl.SSLCertVerificationError):
+                    # TODO separate tab state from browser state
+                    self.state.set_secure("no")
+                print("exception during top level navigation", type(err).__name__, err)
+                result = generate_error_page(err, url)
 
         self.allowed_origins = None
         if "content-security-policy" in headers:
@@ -4654,6 +4700,12 @@ def test_BrowserState():
     # with method
     state.pushlocation("https://example.com", method="POST")
     assert state.get_method() == "POST"
+
+    # get/set secure
+    state.pushlocation("https://something.com")
+    assert state.get_secure() == ""
+    state.set_secure("yes")
+    assert state.get_secure() == "yes"
 
 
 def test_BrowserBookmarks():
