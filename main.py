@@ -199,16 +199,19 @@ class URL:
             "Connection: keep-alive\r\n",
             "Accept-Encoding: gzip\r\n",
         ]
-        cookie_item = cookies.get_cookie_item_by_host(self.host) if cookies else None
-        if cookie_item:
-            cookie, params = cookie_item
-            allow_cookie = True
-            samesite = params.get("samesite", "none")
-            if referrer and samesite == "lax":
-                if method != "GET":
-                    allow_cookie = self.host == referrer.host
-            if allow_cookie:
-                reqlines.append("Cookie: {}\r\n".format(cookie))
+        cookie_items = cookies.get_cookie_items_by_host(self.host) if cookies else []
+        for cookie_item in cookie_items:
+            # TODO move cookie rule eval to cookie jar and then 
+            # here just append the cookie string
+            if cookie_item:
+                cookie, params = cookie_item
+                allow_cookie = True
+                samesite = params.get("samesite", "none")
+                if referrer and samesite == "lax":
+                    if method != "GET":
+                        allow_cookie = self.host == referrer.host
+                if allow_cookie:
+                    reqlines.append("Cookie: {}\r\n".format(cookie))
         if payload:
             length = len(payload.encode("utf8"))
             reqlines.append("Content-Length: {}\r\n".format(length))
@@ -643,6 +646,8 @@ class JSContext:
         js.export_function("XHR_send", self._xhr_send)
         js.export_function("location_set", self._location_set)
         js.export_function("do_default", self._do_default)
+        js.export_function("document_get_cookie", self._document_get_cookie)
+        js.export_function("document_set_cookie", self._document_set_cookie)
 
     def _outerHTML_get(self, handle):
         elt = self.handle_to_node[handle]
@@ -753,6 +758,16 @@ class JSContext:
     def _do_default(self, handle, event_type):
         node = self.handle_to_node[handle]
         self.tab.do_default(node, event_type)
+
+    def _document_get_cookie(self):
+        # TODO this is error prone, make a more straightforward cookie access from tab object
+        host = self.tab.url.host
+        return self.tab.browser.cookies.get_cookie_value_by_host(host)
+
+    def _document_set_cookie(self, value):
+        # TODO this is error prone, make a more straightforward cookie access from tab object
+        host = self.tab.url.host
+        return self.tab.browser.cookies.set_cookie_by_host(host, value)
 
     def _get_handle(self, elt):
         if not elt:
@@ -1121,21 +1136,28 @@ class CookieJar:
         self.dirty = False
 
     def get_cookie_value_by_host(self, host):
-        item = self.get_cookie_item_by_host(host)
-        if item:
-            return item[0]
+        items = self.get_cookie_items_by_host(host)
+        result = ''
+        if items:
+            result = '; '.join([x[0] for x in items])
+        print("result is", result)
+        return result
 
-    def get_cookie_item_by_host(self, host):
-        item = self.data.get(host)
-        if isinstance(item, str):
-            item = parse_cookie(item)
-        return item
+    def get_cookie_items_by_host(self, host):
+        items = self.data.get(host, [])
+        if isinstance(items, str):
+            items = [parse_cookie(items)]
+        if items and len(items) > 0 and isinstance(items[0], str):
+            items = [items]
+        return items
 
     def set_cookie_by_host(self, host, cookie):
         item = parse_cookie(cookie)
-        print("set_cookie_by_host", host, item)
-        if self.get_cookie_item_by_host(host) != item:
-            self.data[host] = item
+        if self.get_cookie_items_by_host(host) != item:
+            if not isinstance(self.data.get(host), list):
+                self.data[host] = []
+            cookies = self.data[host]
+            cookies.append(item)
             self.dirty = True
             print("setting data value",self.data, self)
         else:
@@ -1164,6 +1186,7 @@ def parse_cookie(cookie):
             else:
                 value = "true"  
         params[param.strip().casefold()] = value.casefold()
+    print("IS", cookie, params)
     return [cookie, params]
 
 
@@ -2130,6 +2153,7 @@ class GUIBrowserTab:
                     self.state.set_secure("no")
                 print("exception during top level navigation", type(err).__name__, err)
                 result = generate_error_page(err, url)
+                raise err
 
         self.allowed_origins = None
         if "content-security-policy" in headers:
@@ -4332,6 +4356,7 @@ def test():
     test_CSS_selectors()
     test_BrowserState()
     test_BrowserBookmarks()
+    test_CookieJar()
 
 
 def test_CSS_selectors():
@@ -4718,6 +4743,20 @@ def test_BrowserBookmarks():
     assert bm.get_title("https://example.com") == "Example"
     bm.toggle("https://example.com", "Example")
     assert bm.get_count() == 0
+
+
+def test_CookieJar():
+    cj = CookieJar(None)
+    
+    # basic get/set
+    cj.set_cookie_by_host("a", "test=4")
+    assert cj.get_cookie_value_by_host("a") == "test=4"
+
+    # set multiple cookies
+    cj.set_cookie_by_host("b", "test=4")
+    cj.set_cookie_by_host("b", "other=9")
+    assert cj.get_cookie_value_by_host("b") == "test=4; other=9"
+
 
 def integration_test(browser, testsuite):
     import os

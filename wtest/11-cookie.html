@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<body>
+    <div class="content"></div>
+</body>
+<script>
+    document.cookie = "test=4"
+    if (!document.cookie.includes("test=4")) throw "did not set test";
+    document.cookie = "other=9"
+    if (!document.cookie.includes("test=4")) throw "it usnet test";
+    if (!document.cookie.includes("other=9")) throw "did not set other";
+    document.title = "passed"
+</script>

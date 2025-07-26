@@ -75,6 +75,7 @@
     Object.defineProperties(Document.prototype, {
         'title': {  get: function() { return py("document_get_title")}, set: function(s) { return py("document_set_title", s.toString()); }  },
         'body': {  get: function() { return tonode(py("document_get_body")) }  },
+        'cookie': {  get: function() { return py("document_get_cookie")}, set: function(s) { return py("document_set_cookie", s.toString()); }  },
     })
 
     window.XMLHttpRequest = function XMLHttpRequest(){}
