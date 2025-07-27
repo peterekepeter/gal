@@ -200,6 +200,7 @@ class URL:
             "Accept-Encoding: gzip\r\n",
         ]
         cookie_items = cookies.get_cookie_items_by_host(self.host) if cookies else []
+        cookies_to_send = []
         for cookie_item in cookie_items:
             # TODO move cookie rule eval to cookie jar and then 
             # here just append the cookie string
@@ -211,7 +212,10 @@ class URL:
                     if method != "GET":
                         allow_cookie = self.host == referrer.host
                 if allow_cookie:
-                    reqlines.append("Cookie: {}\r\n".format(cookie))
+                    cookies_to_send.append(cookie)
+        if cookies_to_send:
+            cookies_str = "; ".join(cookies_to_send)
+            reqlines.append("Cookie: {}\r\n".format(cookies_str))
         if payload:
             length = len(payload.encode("utf8"))
             reqlines.append("Content-Length: {}\r\n".format(length))
@@ -762,12 +766,12 @@ class JSContext:
     def _document_get_cookie(self):
         # TODO this is error prone, make a more straightforward cookie access from tab object
         host = self.tab.url.host
-        return self.tab.browser.cookies.get_cookie_value_by_host(host)
+        return self.tab.browser.cookies.get_cookie_value_by_host(host, is_script=True)
 
     def _document_set_cookie(self, value):
         # TODO this is error prone, make a more straightforward cookie access from tab object
         host = self.tab.url.host
-        return self.tab.browser.cookies.set_cookie_by_host(host, value)
+        return self.tab.browser.cookies.set_cookie_by_host(host, value, is_script=True)
 
     def _get_handle(self, elt):
         if not elt:
@@ -1135,11 +1139,11 @@ class CookieJar:
         self.data = {}
         self.dirty = False
 
-    def get_cookie_value_by_host(self, host):
+    def get_cookie_value_by_host(self, host, is_script=False):
         items = self.get_cookie_items_by_host(host)
         result = ''
         if items:
-            result = '; '.join([x[0] for x in items])
+            result = '; '.join([x[0] for x in items if not (is_script and x[1].get("httponly"))])
         print("result is", result)
         return result
 
@@ -1151,15 +1155,27 @@ class CookieJar:
             items = [items]
         return items
 
-    def set_cookie_by_host(self, host, cookie):
+    def set_cookie_by_host(self, host, cookie, is_script=False):
         item = parse_cookie(cookie)
         if self.get_cookie_items_by_host(host) != item:
             if not isinstance(self.data.get(host), list):
                 self.data[host] = []
             cookies = self.data[host]
+            print(cookies)
+            for other in cookies:
+                print("other key is ", other[1].get("key"), "item key is", item[1].get("key"))
+                if other[1].get("key") == item[1].get("key"):
+                    if is_script and other[1].get("httponly"):
+                        print("script cannot write http only cookie")
+                        return
+                    other[0] = item[0]
+                    other[1] = item[1]
+                    self.dirty = True
+                    print("updating existing cookie")
+                    return
             cookies.append(item)
             self.dirty = True
-            print("setting data value",self.data, self)
+            print("setting new cookie value",self.data, self)
         else:
             print('no change')
 
@@ -1186,6 +1202,9 @@ def parse_cookie(cookie):
             else:
                 value = "true"  
         params[param.strip().casefold()] = value.casefold()
+    [key, value] = cookie.split("=")
+    params["key"] = key
+    params["value"] = value
     print("IS", cookie, params)
     return [cookie, params]
 
@@ -4756,6 +4775,13 @@ def test_CookieJar():
     cj.set_cookie_by_host("b", "test=4")
     cj.set_cookie_by_host("b", "other=9")
     assert cj.get_cookie_value_by_host("b") == "test=4; other=9"
+
+    # http only
+    cj.set_cookie_by_host("c", "session=1; HttpOnly")
+    assert cj.get_cookie_value_by_host("c", is_script=True) == ""
+    cj.set_cookie_by_host("c", "session=2", is_script=True)
+    assert cj.get_cookie_value_by_host("c", is_script=True) == ""
+    assert cj.get_cookie_value_by_host("c") == "session=1"
 
 
 def integration_test(browser, testsuite):
