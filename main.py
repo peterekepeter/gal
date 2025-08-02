@@ -1441,6 +1441,7 @@ class GUIBrowser:
         w.bind("<Control-u>", self.viewsource)
         w.bind("<Control-n>", self.newwindow)
         w.bind("<Control-b>", self.newbookmarkstab)
+        w.bind("<Control-l>", self.focusaddressbar)
         w.bind("<Control-d>", lambda e: self.toggle_bookmark())
         w.bind("<Key>", self.handlekey)
         w.bind("<Return>", self.pressenter)
@@ -1596,6 +1597,9 @@ class GUIBrowser:
         self.chrome.focusaddressbar()
         self.restorestate()
         self.state.save()
+
+    def focusaddressbar(self, e):
+        self.chrome.focusaddressbar()
 
     def addressbarsubmit(self, value):
         if "/" not in value and ":" not in value:
@@ -3639,6 +3643,7 @@ class HTMLParser:
         "&mdash;": "—",
         "&#39;": "'",
         "&shy;": "­",
+        "&rsquo;":"’",
     }
 
     SELF_CLOSING_TAGS = [
@@ -4800,6 +4805,9 @@ def test_CookieJar():
     cj.set_cookie_by_host("c", "session=2", is_script=True)
     assert cj.get_cookie_value_by_host("c", is_script=True) == ""
     assert cj.get_cookie_value_by_host("c") == "session=1"
+
+    # expires
+    cj.set_cookie_by_host("d", "value=4")
 
 
 def test_parse_http_date():
