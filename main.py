@@ -1209,6 +1209,23 @@ def parse_cookie(cookie):
     return [cookie, params]
 
 
+http_date_format = "%a, %d %b %Y %H:%M:%S GMT"
+
+
+def parse_http_date(str):
+    import time
+    import calendar
+
+    struct = time.strptime(str, http_date_format)
+    return calendar.timegm(struct)
+
+
+def format_http_date(t):
+    import time
+    struct = time.gmtime(t)
+    return time.strftime(http_date_format, struct)
+
+
 class BrowserHistory:
     def __init__(self, profile_dir):
         self.file = (
@@ -4376,6 +4393,7 @@ def test():
     test_BrowserState()
     test_BrowserBookmarks()
     test_CookieJar()
+    test_parse_http_date()
 
 
 def test_CSS_selectors():
@@ -4782,6 +4800,15 @@ def test_CookieJar():
     cj.set_cookie_by_host("c", "session=2", is_script=True)
     assert cj.get_cookie_value_by_host("c", is_script=True) == ""
     assert cj.get_cookie_value_by_host("c") == "session=1"
+
+
+def test_parse_http_date():
+    parse = parse_http_date
+    fmt = format_http_date
+    assert fmt(0) == "Thu, 01 Jan 1970 00:00:00 GMT"
+    assert parse("Thu, 01 Jan 1970 00:00:00 GMT") == 0
+    assert parse("Tue, 29 Oct 2024 16:56:32 GMT") == 1730220992
+    assert fmt(1730220992) == "Tue, 29 Oct 2024 16:56:32 GMT"
 
 
 def integration_test(browser, testsuite):
