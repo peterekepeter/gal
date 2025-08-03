@@ -2,4 +2,6 @@
 .profile
 .gal
 .venv
+venv
 __pycache__
+*.py.swp

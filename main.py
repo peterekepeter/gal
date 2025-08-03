@@ -1144,8 +1144,47 @@ class CookieJar:
         result = ''
         if items:
             result = '; '.join([x[0] for x in items if not (is_script and x[1].get("httponly"))])
-        print("result is", result)
         return result
+
+    def set_cookie_by_host(self, host, cookie, is_script=False):
+        item = parse_cookie(cookie)
+        if self.get_cookie_items_by_host(host) != item:
+            if not isinstance(self.data.get(host), list):
+                self.data[host] = []
+            cookies = self.data[host]
+            for other in cookies:
+                if other[1].get("key") == item[1].get("key"):
+                    if is_script and other[1].get("httponly"):
+                        return
+                    other[0] = item[0]
+                    other[1] = item[1]
+                    self.dirty = True
+                    return
+            cookies.append(item)
+            self.dirty = True
+
+    def purge_expired_by_host(self, host, now):
+        items = self.get_cookie_items_by_host(host)
+        expired = None
+        for cookie in items:
+            expires = cookie[1].get("expires")
+            if not expires:
+                # session cookie expiration
+                date_str = format_http_date(now + 60*60*8)
+                cookie[1]["expires"] = date_str
+                cookie[1]["__is_session"] = "true"
+                self.dirty = True
+                continue
+            parsed = parse_http_date(expires)
+            if parsed < now:
+                if not expired:
+                    expired = []
+                expired.append(cookie)
+        if not expired:
+            return
+        self.dirty = True
+        new_items = [x for x in items if x not in expired]
+        self.data[host] = new_items
 
     def get_cookie_items_by_host(self, host):
         items = self.data.get(host, [])
@@ -1154,30 +1193,6 @@ class CookieJar:
         if items and len(items) > 0 and isinstance(items[0], str):
             items = [items]
         return items
-
-    def set_cookie_by_host(self, host, cookie, is_script=False):
-        item = parse_cookie(cookie)
-        if self.get_cookie_items_by_host(host) != item:
-            if not isinstance(self.data.get(host), list):
-                self.data[host] = []
-            cookies = self.data[host]
-            print(cookies)
-            for other in cookies:
-                print("other key is ", other[1].get("key"), "item key is", item[1].get("key"))
-                if other[1].get("key") == item[1].get("key"):
-                    if is_script and other[1].get("httponly"):
-                        print("script cannot write http only cookie")
-                        return
-                    other[0] = item[0]
-                    other[1] = item[1]
-                    self.dirty = True
-                    print("updating existing cookie")
-                    return
-            cookies.append(item)
-            self.dirty = True
-            print("setting new cookie value",self.data, self)
-        else:
-            print('no change')
 
     def restore(self):
         if self.file:
@@ -1200,12 +1215,11 @@ def parse_cookie(cookie):
             if '=' in param:
                 param, value = param.split("=", 1)
             else:
-                value = "true"  
+                value = "true" 
         params[param.strip().casefold()] = value.casefold()
     [key, value] = cookie.split("=")
     params["key"] = key
     params["value"] = value
-    print("IS", cookie, params)
     return [cookie, params]
 
 
@@ -2182,6 +2196,9 @@ class GUIBrowserTab:
                 raise Exception("about page not found!")
         else:  # external data source
             try:
+                import time
+
+                self.browser.cookies.purge_expired_by_host(url.host, time.time())
                 headers, result, url = url.request(max_redirect=5, readcache=readcache, payload=payload, cookies=self.browser.cookies, referrer=referrer, method=method)
                 if self.url is not url:
                     self.url = url # url may change due to request handling redirect
@@ -4789,7 +4806,7 @@ def test_BrowserBookmarks():
 
 def test_CookieJar():
     cj = CookieJar(None)
-    
+
     # basic get/set
     cj.set_cookie_by_host("a", "test=4")
     assert cj.get_cookie_value_by_host("a") == "test=4"
@@ -4806,8 +4823,25 @@ def test_CookieJar():
     assert cj.get_cookie_value_by_host("c", is_script=True) == ""
     assert cj.get_cookie_value_by_host("c") == "session=1"
 
-    # expires
-    cj.set_cookie_by_host("d", "value=4")
+    # expires handled
+    cj.set_cookie_by_host("d", "value=4; Expires=Sun, 03 Aug 2025 10:13:15 GMT")
+    assert cj.get_cookie_value_by_host("d") == "value=4"
+    parse_date = parse_http_date
+    before = parse_date("Sun, 03 Aug 2025 10:00:00 GMT")
+    after = parse_date("Sun, 03 Aug 2025 10:59:59 GMT")
+    cj.purge_expired_by_host("d", before)
+    assert cj.get_cookie_value_by_host("d") == "value=4"
+    cj.purge_expired_by_host("d", after)
+    assert cj.get_cookie_value_by_host("d") == ""
+
+    # cookies without expiry (session cookies) expire after 8 hours
+    cj.set_cookie_by_host("e", "id=4")
+    cj.purge_expired_by_host("e", parse_date("Sun, 03 Aug 2025 10:00:00 GMT"))
+    assert cj.get_cookie_value_by_host("e") == "id=4"
+    cj.purge_expired_by_host("e", parse_date("Sun, 03 Aug 2025 17:59:00 GMT"))
+    assert cj.get_cookie_value_by_host("e") == "id=4"
+    cj.purge_expired_by_host("e", parse_date("Sun, 03 Aug 2025 18:01:00 GMT"))
+    assert cj.get_cookie_value_by_host("e") == ""
 
 
 def test_parse_http_date():
