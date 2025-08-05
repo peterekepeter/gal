@@ -733,7 +733,7 @@ class JSContext:
             return handle
         node = self.handle_to_node[handle]
         return self._get_handle(node.parent)
-    
+
     def _getComputedStyle(self, handle):
         self.tab.render()
         node = self.handle_to_node[handle]
@@ -742,23 +742,40 @@ class JSContext:
     def _xhr_send(self, method, url, body):
         parent_url = self.tab.url
         url = URL(url, parent=parent_url)
+        allowed = True
+        simple = False
         if url.scheme != "data" and url.origin() != parent_url.origin():
             # always allow data: protocol (data hardcoded into url)
-            # otherse compare origin
-            # TODO: i think origin handling should be more standardized
-            raise Exception("Cross-origin XHR request not allowed")
+            # TODO: I think origin handling should be more standardized
+            allowed = False
+            # TODO: check headers
+            simple = is_simple_request(method, None)
         if not self.tab.allowed_request(url):
             # TODO add wstest specifically for this
             print("Blocked XHR", url, "due to CSP")
             return None
-        _, content, url = url.request(payload=body, cookies=self.tab.browser.cookies)
+        if not allowed and not simple:
+            # TODO CORS preflight
+            raise Exception("Cross-origin XHR preflight not implemented")
+        # TODO: pass headers into request
+        headers, content, url = url.request(payload=body, cookies=self.tab.browser.cookies, method=method)
+        if simple and not allowed:
+            allow_header = headers.get("access-control-allow-origin")
+            if allow_header == "*":
+                allowed = True
+            elif not allow_header:
+                pass
+            else:
+                raise Exception("Cross-origin XHR simple request header not supported")
+        if not allowed:
+            raise Exception("Cross-origin XHR not allowed")
         return content
 
     def _location_set(self, value):
         travelurl = self.tab.resolve_url(value)
         self.tab.state.pushlocation(travelurl)
         self.tab.restorestate()
-    
+
     def _do_default(self, handle, event_type):
         node = self.handle_to_node[handle]
         self.tab.do_default(node, event_type)
@@ -783,6 +800,23 @@ class JSContext:
         else:
             handle = self.node_to_handle[elt]
         return handle
+
+
+def is_simple_request(method, headers=None):
+    if method not in ["GET", "POST", "HEAD"]:
+        return False
+    if not headers:
+        return True
+    for key in headers:
+        if key not in ["Accept", "Accept-Language", "Content-Language", "Content-Type", "Range"]:
+            return False
+        # TODO handle illegal headers
+        # TODO check range value
+        if "Content-Type" in headers and headers["Content-Type"] not in [
+            "application/x-www-form-urlencoded", "multipart/form-data", "text/plain"
+        ]:
+            return False
+    return True
 
 
 def get_js_runtime_code():
@@ -4416,6 +4450,7 @@ def test():
     test_BrowserBookmarks()
     test_CookieJar()
     test_parse_http_date()
+    test_is_simple_request()
 
 
 def test_CSS_selectors():
@@ -4851,6 +4886,24 @@ def test_parse_http_date():
     assert parse("Thu, 01 Jan 1970 00:00:00 GMT") == 0
     assert parse("Tue, 29 Oct 2024 16:56:32 GMT") == 1730220992
     assert fmt(1730220992) == "Tue, 29 Oct 2024 16:56:32 GMT"
+
+
+def test_is_simple_request():
+    chk = is_simple_request
+    assert chk("GET") is True
+    assert chk("HEAD") is True
+    assert chk("POST") is True
+    assert chk("PUT") is False
+    assert chk("DELETE") is False
+    assert chk("GET", {"X-Some-Thing": "123"}) is False
+    assert chk("GET", {"Accept": "*/*"}) is True
+    assert chk("GET", {"Accept-Language": "en"}) is True
+    assert chk("GET", {"Content-Language": "en-US"}) is True
+    assert chk("GET", {"Content-Type": "text/plain"}) is True
+    assert chk("GET", {"Content-Type": "application/x-www-form-urlencoded"}) is True
+    assert chk("GET", {"Content-Type": "multipart/form-data"}) is True
+    assert chk("GET", {"Content-Type": "application/json"}) is False
+    assert chk("GET", {"Range": "bytes=127-255"}) is True
 
 
 def integration_test(browser, testsuite):
