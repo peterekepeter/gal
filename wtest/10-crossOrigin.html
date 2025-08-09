@@ -5,7 +5,8 @@
 <script>
     document.body.onload = function(){
         var xhr = new XMLHttpRequest();
-        xhr.open("GET", "http://localhost:8000", false);
+        // complex expect prefight error, expect IP to not resolve
+        xhr.open("PUT", "http://127.255.255.254:65432", false); 
         try {
             xhr.send(); // should trigger exception
             var target = document.querySelectorAll('.content')[0];

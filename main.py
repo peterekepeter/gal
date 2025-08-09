@@ -216,6 +216,9 @@ class URL:
         if cookies_to_send:
             cookies_str = "; ".join(cookies_to_send)
             reqlines.append("Cookie: {}\r\n".format(cookies_str))
+        if referrer:
+            referrer_str = referrer.get_str(with_fragment=False)
+            reqlines.append("Referer: {}\r\n".format(referrer_str))
         if payload:
             length = len(payload.encode("utf8"))
             reqlines.append("Content-Length: {}\r\n".format(length))
@@ -333,8 +336,6 @@ class URL:
                 # cache control not handled, better not cache
                 store = False
 
-            print("store", store)
-
             if store and cache_key:
                 cache_entry = {
                     "expires": expires,
@@ -358,7 +359,7 @@ class URL:
     def get_cache_key(self) -> str:
         return f"{self.scheme}://{self.host}:{self.port}{self.path}{self.search}"
 
-    def get_str(self) -> str:
+    def get_str(self, with_fragment=True) -> str:
         if self.scheme == "file":
             return f"{self.scheme}://{self.path}"
         if self.scheme == "about":
@@ -369,9 +370,10 @@ class URL:
             port = ""
         else:
             port = f":{self.port}"
-        return (
-            f"{self.scheme}://{self.host}{port}{self.path}{self.search}{self.fragment}"
-        )
+        str = f"{self.scheme}://{self.host}{port}{self.path}{self.search}"
+        if with_fragment and self.fragment:
+            str += self.fragment
+        return str
 
     def __str__(self):
         return self.get_str()
@@ -977,6 +979,10 @@ class BrowserState:
         item = self._get_current_item()
         return item.get("url", "")
 
+    def get_referrer(self) -> str:
+        item = self._get_current_item()
+        return item.get("referrer", "")
+
     def get_payload(self) -> str:
         item = self._get_current_item()
         return item.get("payload")
@@ -1020,7 +1026,7 @@ class BrowserState:
             self.data["active_tab_index"] = active
             self.dirty = True
 
-    def pushlocation(self, url, payload=None, method=None):
+    def pushlocation(self, url, payload=None, method=None, referrer=None):
         item = self._get_current_item()
         to_return_to = self._create_return_item()
         history_list = item.get("history", [])
@@ -1028,10 +1034,10 @@ class BrowserState:
         item["history"] = history_list
         if "future" in item:
             item.pop("future")
-        self.replacelocation(url, payload, method)
+        self.replacelocation(url, payload, method, referrer)
         self.dirty = True
 
-    def replacelocation(self, url, payload=None, method=None):
+    def replacelocation(self, url, payload=None, method=None, referrer=None):
         item = self._get_current_item()
         if item.get("url", "") != url:
             item["url"] = url
@@ -1045,6 +1051,10 @@ class BrowserState:
                 item["method"] = method
             elif "method" in item:
                 del item["method"]
+            if referrer:
+                item["referrer"] = referrer
+            elif "referrer" in item:
+                del item["referrer"]
             self.dirty = True
 
     def can_back(self):
@@ -2158,6 +2168,7 @@ class GUIBrowserTab:
         self.height = 0
         self.nodes = None
         self.focus = None
+        self.loaddepth = 0
         self.loaded = ""
         self.loadedpayload = ""
         self.toload = ""
@@ -2176,6 +2187,8 @@ class GUIBrowserTab:
     def restorestate(self, isreload=False):
         self.scroll = self.state.get_scroll() or 0
         url = self.state.get_url()
+        referrer_str = self.state.get_referrer()
+        referrer = URL(referrer_str) if referrer_str else None
         payload = self.state.get_payload()
         if not isreload and url == self.loaded and payload == self.loadedpayload:
             # already loaded
@@ -2200,11 +2213,21 @@ class GUIBrowserTab:
             return
     
         # proceed with loading GET requests only
-        self.load(self.state.get_url(), readcache=not isreload)
+        self.load(self.state.get_url(), readcache=not isreload, referrer=referrer)
 
     def load(self, urlstr, readcache, payload=None, referrer=None, method=None):
+        self.loaddepth += 1
+        if self.loaddepth > 5:
+            raise Exception("recursive tab load depth exceeds 5 levels of depth")
+        try:
+            self.load_tab(urlstr, readcache, payload, referrer, method)
+        finally:
+            self.loaddepth -= 1    
+
+    def load_tab(self, urlstr, readcache, payload=None, referrer=None, method=None):
         self.loaded = ""
         self.loadedpayload = ""
+        self.js = None
         if urlstr == "" or urlstr.isspace():
             urlstr = "about:blank"
         self.modal = None
@@ -2253,6 +2276,15 @@ class GUIBrowserTab:
                 self.allowed_origins = []
                 for origin in csp[1:]:
                     self.allowed_origins.append(URL(origin).origin())
+
+        self.referrer_policy = None
+        if "referrer-policy" in headers:
+            policy = headers["referrer-policy"]
+            if policy in ['no-referrer', 'same-origin']:
+                self.referrer_policy = policy
+            else:
+                self.referrer_policy = 'no-referrer'
+                print('Using no-referrer because referrer policy {} not supported', policy)
 
         parser_class = HTMLParser if not url.viewsource else HTMLSourceParser
 
@@ -2480,13 +2512,18 @@ class GUIBrowserTab:
             self.submit_form(form)
 
         if travelurl:
+            referrer = self.url.get_str(with_fragment=False)
+            # TODO extract and extend referrer policy handling
+            if self.referrer_policy == "no-referrer":
+                referrer = None
+            elif self.referrer_policy == "same-origin":
+                if URL(referrer).origin() != URL(travelurl).origin():
+                    referrer = None
             if button == 1:
-                # TODO add referrer to pushlocation to validate samesite
-                self.state.pushlocation(travelurl)
+                self.state.pushlocation(travelurl, referrer=referrer)
                 self.restorestate()
             elif button == 2:
-                # TODO add referrer to validate samesite
-                self.state.newtab(travelurl)
+                self.state.newtab(travelurl, referrer=referrer)
                 self.restorestate()
             else:
                 pass
@@ -2621,6 +2658,12 @@ class GUIBrowserTab:
     def evaljs(self, url, code):
         if not self.js and self.is_js_enabled():
             self.js = JSContext(self)
+            # TODO dedup element id indexing logic
+            for node in tree_to_list(self.nodes, []):
+                if isinstance(node, Element):
+                    id = node.attributes.get("id")
+                    if id:
+                        self.js.add_global_name(id, node)
         self.js.run(url, code)
 
     def dispatch_js_event(self, type, node):
@@ -5001,6 +5044,7 @@ if __name__ == "__main__":
     ui = GUIBrowser()
     data = BrowserData()
     parsearg = None
+    urls = []
     for arg in sys.argv[1:]:
         if parsearg:
             if parsearg == "--profile-dir":
@@ -5037,11 +5081,12 @@ if __name__ == "__main__":
             else:
                 raise Exception(f"unknown flag '{flag}'")
         else:
-            url = arg
-            data.state.newtab(url)
+            urls.append(arg)
 
     try:
         data.restore()
+        for url in urls:
+            data.state.newtab(url)
         ui.setup(data)
     except Exception as err:
         import traceback
